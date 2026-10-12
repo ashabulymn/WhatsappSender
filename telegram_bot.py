@@ -23,9 +23,14 @@ import config
 import database
 import csv_handler
 from whatsapp import WhatsAppClient, _render_message
+from i18n import t
 
 logger = logging.getLogger(__name__)
 wa_client = WhatsAppClient()
+
+LANG = config.APP_LANG
+# Language-independent yes-words (id + en + legacy fr)
+CONFIRM_WORDS = {"ya", "y", "iya", "yes", "ok", "oui"}
 
 # Conversation states
 IMPORT_CSV, IMPORT_NAME = range(2)
@@ -44,9 +49,9 @@ def admin_only(func):
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if update.effective_user.id not in config.TELEGRAM_ADMIN_IDS:
             if update.message:
-                await update.message.reply_text("⛔ Acces refuse. Admin uniquement.")
+                await update.message.reply_text(t("tg.access_denied", lang=LANG))
             elif update.callback_query:
-                await update.callback_query.answer("⛔ Acces refuse.", show_alert=True)
+                await update.callback_query.answer(t("tg.access_denied", lang=LANG), show_alert=True)
             return ConversationHandler.END
         return await func(update, context)
     return wrapper
@@ -70,21 +75,21 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     keyboard = [
         [
-            InlineKeyboardButton("📊 Stats", callback_data="stats"),
-            InlineKeyboardButton("👥 Contacts", callback_data="contacts"),
+            InlineKeyboardButton(t("tg.btn_stats", lang=LANG), callback_data="stats"),
+            InlineKeyboardButton(t("tg.btn_contacts", lang=LANG), callback_data="contacts"),
         ],
         [
-            InlineKeyboardButton("📢 Campagnes", callback_data="campaigns"),
-            InlineKeyboardButton("📋 Templates", callback_data="templates"),
+            InlineKeyboardButton(t("tg.btn_campaigns", lang=LANG), callback_data="campaigns"),
+            InlineKeyboardButton(t("tg.btn_templates", lang=LANG), callback_data="templates"),
         ],
         [
-            InlineKeyboardButton("ℹ️ Aide", callback_data="help"),
+            InlineKeyboardButton(t("tg.btn_help", lang=LANG), callback_data="help"),
         ],
     ]
     await reply(
         f"📱 <b>{_esc(config.BOT_NAME)}</b> v{config.BOT_VERSION}\n\n"
-        f"Panel d'administration.\n"
-        f"Provider: {config.WA_PROVIDER.upper()}",
+        f"{t('tg.start_admin', lang=LANG)}\n"
+        f"{t('tg.provider', lang=LANG).format(p=config.WA_PROVIDER.upper())}",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="HTML",
     )
@@ -100,16 +105,16 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     campaigns = await database.get_all_campaigns()
 
     text = (
-        f"📊 <b>Statistiques</b>\n\n"
-        f"👥 Contacts: {contact_count}\n"
-        f"📢 Campagnes: {len(campaigns)}\n"
-        f"📨 Total envois: {stats.get('total', 0)}\n\n"
-        f"<b>Statuts</b>\n"
-        f"  ⏳ En attente: {stats.get('queued', 0)}\n"
-        f"  ✅ Envoyes: {stats.get('sent', 0)}\n"
-        f"  📬 Livres: {stats.get('delivered', 0)}\n"
-        f"  👁 Lus: {stats.get('read', 0)}\n"
-        f"  ❌ Echoues: {stats.get('failed', 0)}"
+        f"{t('tg.stats_title', lang=LANG)}\n\n"
+        f"{t('tg.contacts_l', lang=LANG).format(n=contact_count)}\n"
+        f"{t('tg.campaigns_l', lang=LANG).format(n=len(campaigns))}\n"
+        f"{t('tg.total_sends', lang=LANG).format(n=stats.get('total', 0))}\n\n"
+        f"{t('tg.statuses', lang=LANG)}\n"
+        f"  {t('tg.pending', lang=LANG).format(n=stats.get('queued', 0))}\n"
+        f"  {t('tg.sent', lang=LANG).format(n=stats.get('sent', 0))}\n"
+        f"  {t('tg.delivered', lang=LANG).format(n=stats.get('delivered', 0))}\n"
+        f"  {t('tg.read', lang=LANG).format(n=stats.get('read', 0))}\n"
+        f"  {t('tg.failed', lang=LANG).format(n=stats.get('failed', 0))}"
     )
     await reply(text, parse_mode="HTML")
 
@@ -121,17 +126,17 @@ async def cmd_contacts(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     contacts = await database.get_all_contacts()
     if not contacts:
-        await reply("Aucun contact. Utilise /import pour importer un CSV.")
+        await reply(t("tg.no_contacts_use_import", lang=LANG))
         return
 
-    lines = [f"👥 <b>Contacts</b> ({len(contacts)})\n"]
+    lines = [f"{t('tg.contacts_title', lang=LANG).format(n=len(contacts))}\n"]
     for c in contacts[:30]:
         fn = _esc(c.get("first_name", ""))
         ln = _esc(c.get("last_name", ""))
         lines.append(f"• <code>{_esc(c['phone'])}</code> — {fn} {ln}")
 
     if len(contacts) > 30:
-        lines.append(f"\n... et {len(contacts) - 30} de plus")
+        lines.append(t("tg.and_more", lang=LANG).format(n=len(contacts) - 30))
 
     await reply("\n".join(lines), parse_mode="HTML")
 
@@ -143,12 +148,12 @@ async def cmd_templates(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     templates = await database.get_all_templates()
     if not templates:
-        await reply("Aucun template.")
+        await reply(t("tg.no_templates", lang=LANG))
         return
 
-    lines = [f"📋 <b>Templates</b> ({len(templates)})\n"]
-    for t in templates:
-        lines.append(f"• <b>{_esc(t['name'])}</b> [{_esc(t['category'])}]\n  {_esc(t['body'][:60])}...")
+    lines = [f"{t('tg.templates_title', lang=LANG).format(n=len(templates))}\n"]
+    for tpl in templates:
+        lines.append(f"• <b>{_esc(tpl['name'])}</b> [{_esc(tpl['category'])}]\n  {_esc(tpl['body'][:60])}...")
 
     await reply("\n".join(lines), parse_mode="HTML")
 
@@ -160,10 +165,8 @@ async def import_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message:
         return ConversationHandler.END
     await update.message.reply_text(
-        "📥 <b>Import CSV</b>\n\n"
-        "Envoie-moi un fichier CSV avec les colonnes:\n"
-        "<code>phone</code>, <code>first_name</code>, <code>last_name</code> (optionnel), <code>email</code> (optionnel)\n\n"
-        "Tape /cancel pour annuler.",
+        f"{t('tg.import_title', lang=LANG)}\n\n"
+        f"{t('tg.import_instructions', lang=LANG)}",
         parse_mode="HTML",
     )
     return IMPORT_CSV
@@ -175,7 +178,7 @@ async def import_csv(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     doc = update.message.document
     if not doc or not doc.file_name.lower().endswith(".csv"):
-        await update.message.reply_text("Envoie un fichier .csv")
+        await update.message.reply_text(t("tg.send_csv", lang=LANG))
         return IMPORT_CSV
 
     file = await doc.get_file()
@@ -183,17 +186,17 @@ async def import_csv(update: Update, context: ContextTypes.DEFAULT_TYPE):
     contacts, errors = csv_handler.parse_csv(bytes(data))
 
     if not contacts:
-        err_text = "\n".join(errors[:3]) if errors else "Aucun contact valide."
-        await update.message.reply_text(f"❌ Import echoue:\n{err_text}")
+        err_text = "\n".join(errors[:3]) if errors else t("tg.no_valid", lang=LANG)
+        await update.message.reply_text(t("tg.import_failed", lang=LANG).format(err=err_text))
         return ConversationHandler.END
 
     context.user_data["import_contacts"] = contacts
     context.user_data["import_errors"] = errors
 
-    msg = f"✅ {len(contacts)} contacts trouves."
+    msg = t("tg.found_n", lang=LANG).format(n=len(contacts))
     if errors:
-        msg += f"\n⚠ {len(errors)} erreurs."
-    msg += "\n\nDonne un nom a cette campagne:"
+        msg += t("tg.errors_n", lang=LANG).format(n=len(errors))
+    msg += t("tg.name_campaign", lang=LANG)
 
     await update.message.reply_text(msg)
     return IMPORT_NAME
@@ -207,10 +210,10 @@ async def import_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     contacts = context.user_data.get("import_contacts", [])
 
     if not contacts:
-        await update.message.reply_text("❌ Aucun contact a importer.")
+        await update.message.reply_text(t("tg.no_contacts_import", lang=LANG))
         return ConversationHandler.END
 
-    status_msg = await update.message.reply_text("⏳ Import en cours...")
+    status_msg = await update.message.reply_text(t("tg.importing", lang=LANG))
 
     contact_ids = []
     for c in contacts:
@@ -226,10 +229,10 @@ async def import_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await database.add_contacts_to_campaign(campaign_id, contact_ids)
 
     await status_msg.edit_text(
-        f"✅ <b>Import termine</b>\n\n"
-        f"Campagne: {_esc(campaign_name)}\n"
-        f"Contacts: {len(contacts)}\n\n"
-        f"Utilise /send pour envoyer des messages.",
+        f"{t('tg.import_done', lang=LANG)}\n\n"
+        f"{t('tg.campaign', lang=LANG).format(name=_esc(campaign_name))}\n"
+        f"{t('tg.contacts', lang=LANG).format(n=len(contacts))}\n\n"
+        f"{t('tg.use_send', lang=LANG)}",
         parse_mode="HTML",
     )
     return ConversationHandler.END
@@ -243,19 +246,19 @@ async def send_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
     campaigns = await database.get_all_campaigns()
     if not campaigns:
-        await update.message.reply_text("Aucune campagne. Utilise /import d'abord.")
+        await update.message.reply_text(t("tg.no_campaign_use_import", lang=LANG))
         return ConversationHandler.END
 
     keyboard = []
     for c in campaigns[:10]:
         count = c.get("contact_count", 0)
         keyboard.append([InlineKeyboardButton(
-            f"{c['name']} ({count} contacts)",
+            f"{c['name']} ({count} {t('tg.contacts_suffix', lang=LANG)})",
             callback_data=f"send_{c['id']}",
         )])
 
     await update.message.reply_text(
-        "📢 <b>Choisir une campagne:</b>",
+        t("tg.choose_campaign", lang=LANG),
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="HTML",
     )
@@ -272,31 +275,28 @@ async def send_select_campaign(update: Update, context: ContextTypes.DEFAULT_TYP
     try:
         campaign_id = int(query.data.replace("send_", ""))
     except (ValueError, TypeError):
-        await query.edit_message_text("Campagne invalide.")
+        await query.edit_message_text(t("tg.campaign_invalid", lang=LANG))
         return ConversationHandler.END
 
     context.user_data["send_campaign_id"] = campaign_id
 
     contacts = await database.get_contacts_for_campaign(campaign_id)
     if not contacts:
-        await query.edit_message_text("Aucun contact dans cette campagne.")
+        await query.edit_message_text(t("tg.no_contacts_in_campaign", lang=LANG))
         return ConversationHandler.END
 
     context.user_data["send_contacts"] = contacts
 
     # Offer templates
     templates = await database.get_all_templates()
-    text = (
-        f"📝 {len(contacts)} destinataires.\n\n"
-        f"Ecris ton message ou choisis un template.\n"
-        f"Placeholders: {{first_name}}, {{last_name}}, {{phone}}\n\n"
-    )
+    # NOTE: tg.recipients_n keeps literal {first_name} braces via {{ }} in the dict.
+    text = t("tg.recipients_n", lang=LANG).format(n=len(contacts))
     if templates:
-        text += "Templates:\n"
-        for t in templates:
-            text += f"• /tpl_{t['name']}\n"
+        text += t("tg.templates", lang=LANG)
+        for tpl in templates:
+            text += f"• /tpl_{tpl['name']}\n"
 
-    text += "\nTape /cancel pour annuler."
+    text += t("tg.cancel_hint", lang=LANG)
     await query.edit_message_text(text)
     return SEND_MESSAGE
 
@@ -314,7 +314,7 @@ async def send_compose(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if tpl:
             text = tpl["body"]
         else:
-            await update.message.reply_text(f"Template '{tpl_name}' introuvable.")
+            await update.message.reply_text(t("tg.template_not_found", lang=LANG).format(name=tpl_name))
             return SEND_MESSAGE
 
     context.user_data["send_message"] = text
@@ -330,9 +330,7 @@ async def send_compose(update: Update, context: ContextTypes.DEFAULT_TYPE):
     })
 
     await update.message.reply_text(
-        f"📋 Apercu:\n\n{preview[:300]}\n\n"
-        f"Destinataires: {len(contacts)}\n\n"
-        f"Confirmer ? Tape oui ou /cancel",
+        t("tg.preview", lang=LANG).format(preview=preview[:300], n=len(contacts)),
     )
     return SEND_CONFIRM
 
@@ -341,8 +339,8 @@ async def send_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in config.TELEGRAM_ADMIN_IDS:
         return ConversationHandler.END
 
-    if update.message.text.strip().lower() not in ("oui", "yes", "ok"):
-        await update.message.reply_text("❌ Envoi annule.")
+    if update.message.text.strip().lower() not in CONFIRM_WORDS:
+        await update.message.reply_text(t("tg.send_cancelled", lang=LANG))
         return ConversationHandler.END
 
     message = context.user_data.get("send_message", "")
@@ -350,14 +348,14 @@ async def send_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     campaign_id = context.user_data.get("send_campaign_id")
 
     if not contacts or not message:
-        await update.message.reply_text("❌ Donnees manquantes.")
+        await update.message.reply_text(t("tg.missing_data", lang=LANG))
         return ConversationHandler.END
 
     # Save message to campaign for audit trail
     if campaign_id:
         await database.update_campaign_message(campaign_id, message)
 
-    status_msg = await update.message.reply_text(f"📤 Envoi en cours... 0/{len(contacts)}")
+    status_msg = await update.message.reply_text(t("tg.sending_n", lang=LANG).format(n=len(contacts)))
     last_edit = [0.0]
     _edit_task = [None]
 
@@ -371,7 +369,7 @@ async def send_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if _edit_task[0] and not _edit_task[0].done():
                 return
             _edit_task[0] = asyncio.get_running_loop().create_task(
-                status_msg.edit_text(f"📤 Envoi en cours... {current}/{total}")
+                status_msg.edit_text(t("tg.sending_progress", lang=LANG).format(c=current, t=total))
             )
 
     recipients = [
@@ -395,9 +393,7 @@ async def send_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await database.update_campaign_status(campaign_id, "sent")
 
     await status_msg.edit_text(
-        f"✅ <b>Envoi termine</b>\n\n"
-        f"Envoyes: {results['sent']}\n"
-        f"Echoues: {results['failed']}",
+        t("tg.send_done", lang=LANG).format(s=results["sent"], f=results["failed"]),
         parse_mode="HTML",
     )
     return ConversationHandler.END
@@ -405,7 +401,7 @@ async def send_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message:
-        await update.message.reply_text("❌ Annule.")
+        await update.message.reply_text(t("tg.cancelled", lang=LANG))
     return ConversationHandler.END
 
 
@@ -416,7 +412,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
 
     if query.from_user.id not in config.TELEGRAM_ADMIN_IDS:
-        await query.edit_message_text("⛔ Acces refuse.")
+        await query.edit_message_text(t("tg.access_denied", lang=LANG))
         return
 
     action = query.data
@@ -425,58 +421,54 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         contact_count = await database.get_contact_count()
         stats = await database.get_send_stats()
         campaigns = await database.get_all_campaigns()
-        text = (
-            f"📊 <b>Statistiques</b>\n\n"
-            f"👥 Contacts: {contact_count}\n"
-            f"📢 Campagnes: {len(campaigns)}\n\n"
-            f"✅ Envoyes: {stats.get('sent', 0)} | "
-            f"📬 Livres: {stats.get('delivered', 0)} | "
-            f"❌ Echoues: {stats.get('failed', 0)}"
+        text = t("tg.stats_inline", lang=LANG).format(
+            c=contact_count,
+            n=len(campaigns),
+            s=stats.get("sent", 0),
+            d=stats.get("delivered", 0),
+            f=stats.get("failed", 0),
         )
         await query.edit_message_text(text, parse_mode="HTML")
 
     elif action == "contacts":
         contacts = await database.get_all_contacts()
         if not contacts:
-            await query.edit_message_text("Aucun contact. Utilise /import.")
+            await query.edit_message_text(t("tg.no_contacts_short", lang=LANG))
             return
-        lines = [f"👥 <b>Contacts</b> ({len(contacts)})\n"]
+        lines = [f"{t('tg.contacts_title', lang=LANG).format(n=len(contacts))}\n"]
         for c in contacts[:20]:
             lines.append(f"• <code>{_esc(c['phone'])}</code> — {_esc(c.get('first_name', ''))} {_esc(c.get('last_name', ''))}")
         if len(contacts) > 20:
-            lines.append(f"\n... et {len(contacts) - 20} de plus")
+            lines.append(t("tg.and_more", lang=LANG).format(n=len(contacts) - 20))
         await query.edit_message_text("\n".join(lines), parse_mode="HTML")
 
     elif action == "campaigns":
         campaigns = await database.get_all_campaigns()
         if not campaigns:
-            await query.edit_message_text("Aucune campagne. Utilise /import.")
+            await query.edit_message_text(t("tg.no_campaign_short", lang=LANG))
             return
-        lines = [f"📢 <b>Campagnes</b> ({len(campaigns)})\n"]
+        lines = [f"{t('tg.campaigns_title', lang=LANG).format(n=len(campaigns))}\n"]
         for c in campaigns[:10]:
             status_emoji = {"draft": "📝", "sent": "✅", "sending": "📤"}.get(c["status"], "⏳")
-            lines.append(f"{status_emoji} {_esc(c['name'])} — {c.get('contact_count', 0)} contacts")
+            lines.append(
+                f"{status_emoji} {_esc(c['name'])} — "
+                f"{c.get('contact_count', 0)} {t('tg.contacts_suffix', lang=LANG)}"
+            )
         await query.edit_message_text("\n".join(lines), parse_mode="HTML")
 
     elif action == "templates":
         templates = await database.get_all_templates()
         if not templates:
-            await query.edit_message_text("Aucun template.")
+            await query.edit_message_text(t("tg.no_templates", lang=LANG))
             return
-        lines = [f"📋 <b>Templates</b> ({len(templates)})\n"]
-        for t in templates:
-            lines.append(f"• <b>{_esc(t['name'])}</b> [{_esc(t['category'])}]")
+        lines = [f"{t('tg.templates_title', lang=LANG).format(n=len(templates))}\n"]
+        for tpl in templates:
+            lines.append(f"• <b>{_esc(tpl['name'])}</b> [{_esc(tpl['category'])}]")
         await query.edit_message_text("\n".join(lines), parse_mode="HTML")
 
     elif action == "help":
         await query.edit_message_text(
-            "ℹ️ <b>Commandes</b>\n\n"
-            "/start — Menu principal\n"
-            "/stats — Statistiques\n"
-            "/contacts — Liste des contacts\n"
-            "/import — Importer un CSV\n"
-            "/send — Envoyer une campagne\n"
-            "/templates — Templates\n",
+            t("tg.help", lang=LANG),
             parse_mode="HTML",
         )
 

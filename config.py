@@ -8,6 +8,8 @@ from __future__ import annotations
 import os
 from dotenv import load_dotenv
 
+from i18n import APP_LANG  # "id" | "en" (from APP_LANG env)
+
 load_dotenv()
 
 
@@ -20,7 +22,7 @@ TELEGRAM_ADMIN_IDS = [
 ]
 
 # -- WhatsApp Provider ----------------------------------------
-WA_PROVIDER = os.getenv("WA_PROVIDER", "twilio").lower()  # twilio | meta
+WA_PROVIDER = os.getenv("WA_PROVIDER", "twilio").lower()  # twilio | meta | gowa
 
 # Twilio
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
@@ -33,6 +35,18 @@ WA_ACCESS_TOKEN = os.getenv("WA_ACCESS_TOKEN", "")
 WA_API_VERSION = os.getenv("WA_API_VERSION", "v21.0")
 WA_VERIFY_TOKEN = os.getenv("WA_VERIFY_TOKEN", "")
 WA_BASE_URL = f"https://graph.facebook.com/{WA_API_VERSION}/{WA_PHONE_NUMBER_ID}/messages"
+
+# GoWA (self-hosted, e.g. https://whatsapp.masyamin.biz.id)
+GOWA_BASE_URL = os.getenv("GOWA_BASE_URL", "").rstrip("/")
+GOWA_USERNAME = os.getenv("GOWA_USERNAME", "")
+GOWA_PASSWORD = os.getenv("GOWA_PASSWORD", "")
+GOWA_DEVICE_ID = os.getenv("GOWA_DEVICE_ID", "")  # optional X-Device-Id header
+try:
+    GOWA_SEND_INTERVAL_SECONDS = float(os.getenv("GOWA_SEND_INTERVAL_SECONDS", "15"))
+except ValueError:
+    GOWA_SEND_INTERVAL_SECONDS = 15.0
+if GOWA_SEND_INTERVAL_SECONDS < 1:
+    GOWA_SEND_INTERVAL_SECONDS = 1.0
 
 # -- Webhook Server -------------------------------------------
 WEBHOOK_HOST = os.getenv("WEBHOOK_HOST", "0.0.0.0")
@@ -76,8 +90,13 @@ def validate() -> list[str]:
             warnings.append("WA_PHONE_NUMBER_ID not set")
         if not WA_ACCESS_TOKEN:
             warnings.append("WA_ACCESS_TOKEN not set")
+    elif WA_PROVIDER == "gowa":
+        if not GOWA_BASE_URL:
+            warnings.append("GOWA_BASE_URL not set")
+        if not GOWA_USERNAME or not GOWA_PASSWORD:
+            warnings.append("GOWA_USERNAME / GOWA_PASSWORD not set (GoWA Basic Auth)")
     else:
-        warnings.append(f"Unknown WA_PROVIDER: {WA_PROVIDER} (use 'twilio' or 'meta')")
+        warnings.append(f"Unknown WA_PROVIDER: {WA_PROVIDER} (use 'twilio', 'meta' or 'gowa')")
 
     if WA_MESSAGES_PER_SECOND <= 0:
         warnings.append(f"WA_MESSAGES_PER_SECOND is {WA_MESSAGES_PER_SECOND}, should be > 0 (defaulting to 1)")

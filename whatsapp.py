@@ -1,6 +1,6 @@
 """
 WhatsApp Bulk Sender — WhatsApp Client
-Multi-provider async WhatsApp messaging (Twilio / Meta Cloud API).
+Multi-provider async WhatsApp messaging (Twilio / Meta Cloud API / GoWA).
 """
 
 from __future__ import annotations
@@ -33,14 +33,19 @@ def _render_message(template: str, placeholders: dict) -> str:
 
 
 class WhatsAppClient:
-    """Unified WhatsApp client supporting Twilio and Meta Cloud API."""
+    """Unified WhatsApp client supporting Twilio, Meta Cloud API and GoWA."""
 
     # Class-level rate state shared across all instances
     _shared_last_send = 0.0
 
     def __init__(self):
         self.provider = config.WA_PROVIDER
-        self._rate_interval = 1.0 / max(1, config.WA_MESSAGES_PER_SECOND)
+        # GoWA drives a real WhatsApp device: keep a human-paced interval
+        # (anti-ban). Cloud providers keep the per-second rate limit.
+        if self.provider == "gowa":
+            self._rate_interval = config.GOWA_SEND_INTERVAL_SECONDS
+        else:
+            self._rate_interval = 1.0 / max(1, config.WA_MESSAGES_PER_SECOND)
 
     async def _rate_limit(self):
         """Enforce rate limiting between sends (shared across all instances)."""
@@ -54,6 +59,14 @@ class WhatsAppClient:
         """Normalize phone for Meta API (digits only)."""
         return re.sub(r"[^0-9]", "", phone)
 
+    @staticmethod
+    def normalize_gowa_phone(phone: str) -> str:
+        """Normalize phone to a GoWA JID (digits + @s.whatsapp.net)."""
+        digits = re.sub(r"[^0-9]", "", phone)
+        if not digits:
+            return phone
+        return f"{digits}@s.whatsapp.net"
+
     async def send_message(self, to: str, body: str) -> dict:
         """Send a single WhatsApp message. Returns {"sid": ..., "status": ...}."""
         await self._rate_limit()
@@ -62,6 +75,8 @@ class WhatsAppClient:
             return await self._send_twilio(to, body)
         elif self.provider == "meta":
             return await self._send_meta(to, body)
+        elif self.provider == "gowa":
+            return await self._send_gowa(to, body)
         else:
             return {"sid": "", "status": "failed", "error": f"Unknown provider: {self.provider}"}
 
@@ -124,6 +139,41 @@ class WhatsAppClient:
             "Content-Type": "application/json",
         }
         return requests.post(config.WA_BASE_URL, json=payload, headers=headers, timeout=15)
+
+    async def _send_gowa(self, to: str, body: str) -> dict:
+        """Send via a self-hosted GoWA server (Basic Auth)."""
+        url = f"{config.GOWA_BASE_URL}/send/message"
+        headers = {"Content-Type": "application/json"}
+        if config.GOWA_DEVICE_ID:
+            headers["X-Device-Id"] = config.GOWA_DEVICE_ID
+        payload = {
+            "phone": self.normalize_gowa_phone(to),
+            "message": body,
+        }
+        auth = (config.GOWA_USERNAME, config.GOWA_PASSWORD)
+
+        try:
+            resp = await asyncio.to_thread(
+                requests.post, url, json=payload, headers=headers, auth=auth, timeout=30
+            )
+            try:
+                result = resp.json()
+            except ValueError:
+                result = {}
+            if resp.status_code in (200, 201) and result.get("code") == "SUCCESS":
+                results = result.get("results", {}) or {}
+                return {"sid": results.get("message_id", ""), "status": "sent"}
+            error_msg = (
+                result.get("message")
+                or (result.get("results") if isinstance(result.get("results"), str) else "")
+                or resp.text[:200]
+                or f"HTTP {resp.status_code}"
+            )
+            logger.error(f"GoWA error for {to}: {error_msg}")
+            return {"sid": "", "status": "failed", "error": error_msg}
+        except Exception as e:
+            logger.error(f"GoWA exception for {to}: {e}")
+            return {"sid": "", "status": "failed", "error": str(e)}
 
     async def send_bulk(
         self,

@@ -14,6 +14,7 @@ import database
 import csv_handler
 from whatsapp import WhatsAppClient, _render_message
 import config
+from i18n import t
 
 # -- ANSI Colors -----------------------------------------------
 
@@ -26,6 +27,10 @@ YELLOW = "\033[93m"
 BLUE = "\033[94m"
 MAGENTA = "\033[95m"
 CYAN = "\033[96m"
+
+LANG = config.APP_LANG
+# Language-independent yes-words (id + en + legacy fr)
+CONFIRM_WORDS = {"ya", "y", "iya", "yes", "ok", "oui"}
 
 wa_client = WhatsAppClient()
 
@@ -51,25 +56,26 @@ def banner():
 
 def menu():
     print(f"""
-{BOLD}Menu Principal{RESET}
+{BOLD}{t("cli.menu_title", lang=LANG)}{RESET}
 {DIM}─────────────────────────────{RESET}
-  {GREEN}1{RESET}  📥  Importer des contacts (CSV)
-  {GREEN}2{RESET}  👥  Voir les contacts
-  {GREEN}3{RESET}  📢  Envoyer des messages
-  {GREEN}4{RESET}  📊  Statistiques
-  {GREEN}5{RESET}  📋  Templates
-  {GREEN}6{RESET}  📨  Historique des envois
-  {GREEN}7{RESET}  💬  Tester un message
-  {GREEN}8{RESET}  🗑   Supprimer tous les contacts
-  {GREEN}0{RESET}  🚪  Quitter
+  {GREEN}1{RESET}  📥  {t("cli.m1", lang=LANG)}
+  {GREEN}2{RESET}  👥  {t("cli.m2", lang=LANG)}
+  {GREEN}3{RESET}  📢  {t("cli.m3", lang=LANG)}
+  {GREEN}4{RESET}  📊  {t("cli.m4", lang=LANG)}
+  {GREEN}5{RESET}  📋  {t("cli.m5", lang=LANG)}
+  {GREEN}6{RESET}  📨  {t("cli.m6", lang=LANG)}
+  {GREEN}7{RESET}  💬  {t("cli.m7", lang=LANG)}
+  {GREEN}8{RESET}  🗑   {t("cli.m8", lang=LANG)}
+  {GREEN}0{RESET}  🚪  {t("cli.m0", lang=LANG)}
 {DIM}─────────────────────────────{RESET}""")
 
 
-def pick(options: list[str], prompt: str = "Choix") -> int | None:
+def pick(options: list[str], prompt: str | None = None) -> int | None:
     """Show numbered options, return selected index or None for cancel."""
+    prompt = prompt or t("cli.choice", lang=LANG)
     for i, opt in enumerate(options, 1):
         print(f"  {GREEN}{i}{RESET}  {opt}")
-    print(f"  {DIM}0{RESET}  Retour")
+    print(f"  {DIM}0{RESET}  {t('cli.back', lang=LANG)}")
 
     choice = safe_input(f"\n  {BOLD}{prompt}:{RESET} ").strip()
     if not choice or choice == "0":
@@ -80,7 +86,7 @@ def pick(options: list[str], prompt: str = "Choix") -> int | None:
             return idx
     except ValueError:
         pass
-    print(f"  {RED}Choix invalide.{RESET}")
+    print(f"  {RED}{t('cli.invalid_choice', lang=LANG)}{RESET}")
     return None
 
 
@@ -99,22 +105,22 @@ def progress_bar(current: int, total: int, status: str = ""):
 
 async def cmd_import():
     """Import contacts from a CSV file."""
-    print(f"\n{BOLD}📥 Importer des contacts{RESET}\n")
+    print(f"\n{BOLD}{t('cli.import_title', lang=LANG)}{RESET}\n")
 
     # Scan for CSV files in current directory
     csv_files = sorted(glob.glob("*.csv"))
     if not csv_files:
-        print(f"  {YELLOW}Aucun fichier CSV trouve dans le repertoire courant.{RESET}")
-        print(f"  {DIM}Place un fichier .csv ici et relance l'import.{RESET}\n")
+        print(f"  {YELLOW}{t('cli.no_csv', lang=LANG)}{RESET}")
+        print(f"  {DIM}{t('cli.place_csv', lang=LANG)}{RESET}\n")
         return
 
-    print(f"  Fichiers CSV trouves:\n")
-    idx = pick(csv_files, "Choisir un fichier")
+    print(f"  {t('cli.csv_found', lang=LANG)}\n")
+    idx = pick(csv_files, t("cli.choose_file", lang=LANG))
     if idx is None:
         return
 
     csv_path = csv_files[idx]
-    print(f"\n  {YELLOW}Lecture de {csv_path}...{RESET}")
+    print(f"\n  {YELLOW}{t('cli.reading', lang=LANG).format(path=csv_path)}{RESET}")
 
     with open(csv_path, "rb") as f:
         content = f.read()
@@ -122,28 +128,28 @@ async def cmd_import():
     contacts, errors = csv_handler.parse_csv(content)
 
     if errors:
-        print(f"\n  {YELLOW}⚠ {len(errors)} avertissement(s):{RESET}")
+        print(f"\n  {YELLOW}{t('cli.warnings', lang=LANG).format(n=len(errors))}{RESET}")
         for err in errors[:5]:
             print(f"    {DIM}{err}{RESET}")
         if len(errors) > 5:
-            print(f"    {DIM}... et {len(errors) - 5} de plus{RESET}")
+            print(f"    {DIM}{t('cli.and_more', lang=LANG).format(n=len(errors) - 5)}{RESET}")
 
     if not contacts:
-        print(f"\n  {RED}Aucun contact valide trouve.{RESET}\n")
+        print(f"\n  {RED}{t('cli.no_valid', lang=LANG)}{RESET}\n")
         return
 
-    print(f"\n  {GREEN}✅ {len(contacts)} contacts valides trouves{RESET}")
-    print(f"\n  {DIM}Apercu (3 premiers):{RESET}")
+    print(f"\n  {GREEN}{t('cli.n_valid', lang=LANG).format(n=len(contacts))}{RESET}")
+    print(f"\n  {DIM}{t('cli.preview3', lang=LANG)}{RESET}")
     for c in contacts[:3]:
         print(f"    {c['first_name']} {c['last_name']} — {CYAN}{c['phone']}{RESET}")
 
     # Create a campaign for this import
-    campaign_name = safe_input(f"\n  {BOLD}Nom de la campagne:{RESET} ").strip()
+    campaign_name = safe_input(f"\n  {BOLD}{t('cli.campaign_name', lang=LANG)}{RESET} ").strip()
     if not campaign_name:
-        campaign_name = f"Import {csv_path}"
+        campaign_name = t("cli.import_of", lang=LANG).format(path=csv_path)
 
     # Save to database
-    print(f"\n  {YELLOW}Enregistrement...{RESET}")
+    print(f"\n  {YELLOW}{t('cli.saving', lang=LANG)}{RESET}")
     contact_ids = []
     for c in contacts:
         cid = await database.upsert_contact(
@@ -158,20 +164,20 @@ async def cmd_import():
     campaign_id = await database.create_campaign(name=campaign_name, message="")
     await database.add_contacts_to_campaign(campaign_id, contact_ids)
 
-    print(f"  {GREEN}✅ {len(contacts)} contacts importes dans la campagne '{campaign_name}'{RESET}")
-    print(f"  {DIM}ID campagne: {campaign_id}{RESET}\n")
+    print(f"  {GREEN}{t('cli.imported_to', lang=LANG).format(n=len(contacts), name=campaign_name)}{RESET}")
+    print(f"  {DIM}{t('cli.campaign_id', lang=LANG).format(id=campaign_id)}{RESET}\n")
 
 
 async def cmd_contacts():
     """Display all contacts."""
     contacts = await database.get_all_contacts()
     if not contacts:
-        print(f"\n  {YELLOW}Aucun contact. Utilise l'option 1 pour importer un CSV.{RESET}\n")
+        print(f"\n  {YELLOW}{t('cli.no_contacts_use1', lang=LANG)}{RESET}\n")
         return
 
-    print(f"\n{BOLD}👥 Contacts ({len(contacts)}){RESET}")
+    print(f"\n{BOLD}{t('cli.contacts_title', lang=LANG).format(n=len(contacts))}{RESET}")
     print(f"{DIM}{'─' * 65}{RESET}")
-    print(f"  {'#':<5} {'Prenom':<15} {'Nom':<15} {'Telephone':<20} {'Email'}")
+    print(f"  {'#':<5} {t('cli.th_first', lang=LANG):<15} {t('cli.th_last', lang=LANG):<15} {t('cli.th_phone', lang=LANG):<20} {t('cli.th_email', lang=LANG)}")
     print(f"{DIM}{'─' * 65}{RESET}")
 
     for i, c in enumerate(contacts[:50], 1):
@@ -180,25 +186,25 @@ async def cmd_contacts():
         print(f"  {i:<5} {fn:<15} {ln:<15} {CYAN}{c['phone']:<20}{RESET} {c.get('email', '')}")
 
     if len(contacts) > 50:
-        print(f"\n  {DIM}... et {len(contacts) - 50} de plus{RESET}")
+        print(f"\n  {DIM}{t('cli.and_more', lang=LANG).format(n=len(contacts) - 50)}{RESET}")
     print()
 
 
 async def cmd_send():
     """Send messages to a campaign's contacts."""
-    print(f"\n{BOLD}📢 Envoyer des messages{RESET}\n")
+    print(f"\n{BOLD}{t('cli.send_title', lang=LANG)}{RESET}\n")
 
     campaigns = await database.get_all_campaigns()
     if not campaigns:
-        print(f"  {YELLOW}Aucune campagne. Importe d'abord des contacts.{RESET}\n")
+        print(f"  {YELLOW}{t('cli.no_campaign_import', lang=LANG)}{RESET}\n")
         return
 
     # Select campaign
     options = [
-        f"{c['name']} — {c['contact_count']} contacts [{c['status']}]"
+        f"{c['name']} — {c['contact_count']} {t('cli.contacts_suffix', lang=LANG)} [{c['status']}]"
         for c in campaigns
     ]
-    idx = pick(options, "Choisir une campagne")
+    idx = pick(options, t("cli.choose_campaign", lang=LANG))
     if idx is None:
         return
 
@@ -206,37 +212,38 @@ async def cmd_send():
     contacts = await database.get_contacts_for_campaign(campaign["id"])
 
     if not contacts:
-        print(f"\n  {YELLOW}Aucun contact dans cette campagne.{RESET}\n")
+        print(f"\n  {YELLOW}{t('cli.no_contacts_in_campaign', lang=LANG)}{RESET}\n")
         return
 
-    print(f"\n  Campagne: {BOLD}{campaign['name']}{RESET}")
-    print(f"  Contacts: {CYAN}{len(contacts)}{RESET}")
+    print(f"\n  {t('cli.campaign', lang=LANG)} {BOLD}{campaign['name']}{RESET}")
+    print(f"  {t('cli.contacts', lang=LANG)} {CYAN}{len(contacts)}{RESET}")
 
     # Select or compose message
-    print(f"\n  {BOLD}Message:{RESET}")
-    print(f"  {DIM}Placeholders: {{first_name}}, {{last_name}}, {{phone}}, {{name}}{RESET}")
+    print(f"\n  {BOLD}{t('cli.message', lang=LANG)}{RESET}")
+    # NOTE: cli.placeholders keeps literal {first_name} braces — no .format() call.
+    print(f"  {DIM}{t('cli.placeholders', lang=LANG)}{RESET}")
 
     # Offer templates
     templates = await database.get_all_templates()
     if templates:
-        print(f"\n  {BOLD}Templates disponibles:{RESET}")
+        print(f"\n  {BOLD}{t('cli.templates_avail', lang=LANG)}{RESET}")
         tpl_idx = pick(
-            [f"{t['name']} [{t['category']}]" for t in templates] + ["Ecrire un message personnalise"],
-            "Template"
+            [f"{tpl['name']} [{tpl['category']}]" for tpl in templates] + [t("cli.write_custom", lang=LANG)],
+            t("cli.template", lang=LANG)
         )
         if tpl_idx is None:
             return
 
         if tpl_idx < len(templates):
             message = templates[tpl_idx]["body"]
-            print(f"\n  {DIM}Template charge.{RESET}")
+            print(f"\n  {DIM}{t('cli.template_loaded', lang=LANG)}{RESET}")
         else:
-            message = safe_input(f"\n  Message: ").strip()
+            message = safe_input(f"\n  {t('cli.message_prompt', lang=LANG)}").strip()
     else:
-        message = safe_input(f"\n  Message: ").strip()
+        message = safe_input(f"\n  {t('cli.message_prompt', lang=LANG)}").strip()
 
     if not message:
-        print(f"  {RED}Annule.{RESET}\n")
+        print(f"  {RED}{t('cli.cancelled', lang=LANG)}{RESET}\n")
         return
 
     # Preview
@@ -248,21 +255,21 @@ async def cmd_send():
         "name": f"{sample.get('first_name', '')} {sample.get('last_name', '')}".strip(),
     })
 
-    print(f"\n  {BOLD}Apercu:{RESET}")
+    print(f"\n  {BOLD}{t('cli.preview', lang=LANG)}{RESET}")
     print(f"  {DIM}{'─' * 40}{RESET}")
     print(f"  {preview[:300]}")
     print(f"  {DIM}{'─' * 40}{RESET}")
-    print(f"\n  Destinataires: {CYAN}{len(contacts)}{RESET}")
-    print(f"  Provider: {CYAN}{config.WA_PROVIDER.upper()}{RESET}")
+    print(f"\n  {t('cli.recipients', lang=LANG).format(n=len(contacts))}")
+    print(f"  {t('cli.provider', lang=LANG).format(p=config.WA_PROVIDER.upper())}")
 
     # Dry run option
-    dry = safe_input(f"\n  Mode test (dry run) ? (oui/non) [{GREEN}non{RESET}]: ").strip().lower()
-    dry_run = dry in ("oui", "o", "yes", "y")
+    dry = safe_input(f"\n  {t('cli.dry_run_prompt', lang=LANG)}").strip().lower()
+    dry_run = dry in CONFIRM_WORDS
 
     if not dry_run:
-        confirm = safe_input(f"  Confirmer l'envoi a {len(contacts)} contacts ? (oui/non): ").strip().lower()
-        if confirm not in ("oui", "o", "yes", "y"):
-            print(f"  {RED}Annule.{RESET}\n")
+        confirm = safe_input(f"  {t('cli.confirm_send', lang=LANG).format(n=len(contacts))}").strip().lower()
+        if confirm not in CONFIRM_WORDS:
+            print(f"  {RED}{t('cli.cancelled', lang=LANG)}{RESET}\n")
             return
 
     # Save message and update campaign
@@ -271,8 +278,8 @@ async def cmd_send():
     await database.update_campaign_status(campaign_id, "sending")
 
     if dry_run:
-        print(f"\n  {YELLOW}🧪 DRY RUN — Aucun message envoye{RESET}")
-        print(f"  {len(contacts)} messages auraient ete envoyes.\n")
+        print(f"\n  {YELLOW}{t('cli.dry_run_banner', lang=LANG)}{RESET}")
+        print(f"  {t('cli.would_send', lang=LANG).format(n=len(contacts))}\n")
         for c in contacts[:2]:
             body = _render_message(message, {
                 "first_name": c.get("first_name", "Contact"),
@@ -286,7 +293,7 @@ async def cmd_send():
         return
 
     # Send
-    print(f"\n  {YELLOW}📤 Envoi en cours...{RESET}\n")
+    print(f"\n  {YELLOW}{t('cli.sending', lang=LANG)}{RESET}\n")
 
     recipients = [
         {
@@ -306,8 +313,8 @@ async def cmd_send():
     )
 
     await database.update_campaign_status(campaign_id, "sent")
-    print(f"\n  {GREEN}✅ Termine !{RESET}")
-    print(f"  Envoyes: {GREEN}{results['sent']}{RESET} | Echoues: {RED}{results['failed']}{RESET}\n")
+    print(f"\n  {GREEN}{t('cli.done', lang=LANG)}{RESET}")
+    print(f"  {t('cli.sent_failed', lang=LANG).format(s=results['sent'], f=results['failed'])}\n")
 
 
 async def cmd_stats():
@@ -317,18 +324,18 @@ async def cmd_stats():
     campaigns = await database.get_all_campaigns()
 
     print(f"""
-{BOLD}📊 Statistiques{RESET}
+{BOLD}{t('cli.stats_title', lang=LANG)}{RESET}
 {DIM}─────────────────────────────{RESET}
-  👥 Contacts:     {CYAN}{contact_count}{RESET}
-  📢 Campagnes:    {CYAN}{len(campaigns)}{RESET}
-  📨 Total envois: {CYAN}{stats.get('total', 0)}{RESET}
+  {t('cli.contacts_l', lang=LANG)}     {CYAN}{contact_count}{RESET}
+  {t('cli.campaigns_l', lang=LANG)}    {CYAN}{len(campaigns)}{RESET}
+  {t('cli.total_sends', lang=LANG)} {CYAN}{stats.get('total', 0)}{RESET}
 
-  {BOLD}Statuts{RESET}
-  ⏳ En attente:   {YELLOW}{stats.get('queued', 0)}{RESET}
-  ✅ Envoyes:      {GREEN}{stats.get('sent', 0)}{RESET}
-  📬 Livres:       {GREEN}{stats.get('delivered', 0)}{RESET}
-  👁  Lus:          {BLUE}{stats.get('read', 0)}{RESET}
-  ❌ Echoues:      {RED}{stats.get('failed', 0)}{RESET}
+  {BOLD}{t('cli.statuses', lang=LANG)}{RESET}
+  {t('cli.pending', lang=LANG)}   {YELLOW}{stats.get('queued', 0)}{RESET}
+  {t('cli.sent', lang=LANG)}      {GREEN}{stats.get('sent', 0)}{RESET}
+  {t('cli.delivered', lang=LANG)}       {GREEN}{stats.get('delivered', 0)}{RESET}
+  {t('cli.read', lang=LANG)}          {BLUE}{stats.get('read', 0)}{RESET}
+  {t('cli.failed', lang=LANG)}      {RED}{stats.get('failed', 0)}{RESET}
 """)
 
 
@@ -336,22 +343,25 @@ async def cmd_templates():
     """Manage message templates."""
     templates = await database.get_all_templates()
 
-    print(f"\n{BOLD}📋 Templates ({len(templates)}){RESET}")
+    print(f"\n{BOLD}{t('cli.templates_title', lang=LANG).format(n=len(templates))}{RESET}")
     print(f"{DIM}{'─' * 50}{RESET}")
 
-    for t in templates:
-        print(f"  {MAGENTA}{t['name']}{RESET} [{t['category']}]")
-        body_preview = t["body"].replace("\n", " ")[:70]
-        ellipsis = "..." if len(t["body"]) > 70 else ""
+    for tpl in templates:
+        print(f"  {MAGENTA}{tpl['name']}{RESET} [{tpl['category']}]")
+        body_preview = tpl["body"].replace("\n", " ")[:70]
+        ellipsis = "..." if len(tpl["body"]) > 70 else ""
         print(f"  {DIM}{body_preview}{ellipsis}{RESET}\n")
 
-    print(f"  {BOLD}Actions:{RESET}")
-    action = pick(["Creer un template", "Supprimer un template", "Retour"], "Action")
+    print(f"  {BOLD}{t('cli.actions', lang=LANG)}{RESET}")
+    action = pick(
+        [t("cli.act_create", lang=LANG), t("cli.act_delete", lang=LANG), t("cli.act_back", lang=LANG)],
+        t("cli.action", lang=LANG),
+    )
 
     if action == 0:
-        name = safe_input(f"\n  Nom: ").strip()
-        category = safe_input(f"  Categorie (general/broadcast/info): ").strip() or "general"
-        print(f"  Corps du message (ligne vide pour terminer):")
+        name = safe_input(f"\n  {t('cli.name', lang=LANG)}").strip()
+        category = safe_input(f"  {t('cli.category', lang=LANG)}").strip() or "general"
+        print(f"  {t('cli.body_lines', lang=LANG)}")
         lines = []
         while True:
             line = safe_input("  > ")
@@ -361,28 +371,28 @@ async def cmd_templates():
         body = "\n".join(lines)
         if name and body:
             await database.create_template(name, category, body)
-            print(f"\n  {GREEN}✅ Template '{name}' cree !{RESET}\n")
+            print(f"\n  {GREEN}{t('cli.template_created', lang=LANG).format(name=name)}{RESET}\n")
         else:
-            print(f"  {RED}Annule.{RESET}\n")
+            print(f"  {RED}{t('cli.cancelled', lang=LANG)}{RESET}\n")
 
     elif action == 1:
         if not templates:
-            print(f"  {YELLOW}Aucun template.{RESET}\n")
+            print(f"  {YELLOW}{t('cli.no_templates', lang=LANG)}{RESET}\n")
             return
-        idx = pick([t["name"] for t in templates], "Supprimer")
+        idx = pick([tpl["name"] for tpl in templates], t("cli.delete_which", lang=LANG))
         if idx is not None:
             await database.delete_template(templates[idx]["name"])
-            print(f"  {GREEN}✅ Template supprime.{RESET}\n")
+            print(f"  {GREEN}{t('cli.template_deleted', lang=LANG)}{RESET}\n")
 
 
 async def cmd_history():
     """Show campaign history."""
     campaigns = await database.get_all_campaigns()
     if not campaigns:
-        print(f"\n  {YELLOW}Aucune campagne.{RESET}\n")
+        print(f"\n  {YELLOW}{t('cli.no_campaigns', lang=LANG)}{RESET}\n")
         return
 
-    print(f"\n{BOLD}📨 Historique des campagnes ({len(campaigns)}){RESET}")
+    print(f"\n{BOLD}{t('cli.history_title', lang=LANG).format(n=len(campaigns))}{RESET}")
     print(f"{DIM}{'─' * 60}{RESET}")
 
     for c in campaigns[:15]:
@@ -395,45 +405,45 @@ async def cmd_history():
             stats = await database.get_campaign_stats(c["id"])
             sent = stats.get("sent", 0) + stats.get("delivered", 0) + stats.get("read", 0)
             failed = stats.get("failed", 0)
-            print(f"    {DIM}Resultats: {sent} envoyes, {failed} echoues{RESET}")
+            print(f"    {DIM}{t('cli.results', lang=LANG).format(s=sent, f=failed)}{RESET}")
         print()
 
 
 async def cmd_test():
     """Test sending a single message."""
-    print(f"\n{BOLD}💬 Tester un message WhatsApp{RESET}")
-    phone = safe_input(f"  Numero (ex: +33612345678): ").strip()
+    print(f"\n{BOLD}{t('cli.test_title', lang=LANG)}{RESET}")
+    phone = safe_input(f"  {t('cli.number_ex', lang=LANG)}").strip()
     if not phone:
-        print(f"  {RED}Annule.{RESET}\n")
+        print(f"  {RED}{t('cli.cancelled', lang=LANG)}{RESET}\n")
         return
 
-    message = safe_input(f"  Message: ").strip()
+    message = safe_input(f"  {t('cli.message_prompt', lang=LANG)}").strip()
     if not message:
-        print(f"  {RED}Annule.{RESET}\n")
+        print(f"  {RED}{t('cli.cancelled', lang=LANG)}{RESET}\n")
         return
 
-    print(f"  {YELLOW}Envoi en cours...{RESET}")
+    print(f"  {YELLOW}{t('cli.sending2', lang=LANG)}{RESET}")
     result = await wa_client.send_message(phone, message)
 
     if result["status"] == "sent":
-        print(f"  {GREEN}✅ Message envoye ! SID: {result.get('sid', 'N/A')}{RESET}\n")
+        print(f"  {GREEN}{t('cli.msg_sent', lang=LANG).format(sid=result.get('sid', 'N/A'))}{RESET}\n")
     else:
-        print(f"  {RED}❌ Echec: {result.get('error', 'Unknown')}{RESET}\n")
+        print(f"  {RED}{t('cli.send_failed', lang=LANG).format(err=result.get('error', 'Unknown'))}{RESET}\n")
 
 
 async def cmd_delete_contacts():
     """Delete all contacts."""
     count = await database.get_contact_count()
     if count == 0:
-        print(f"\n  {YELLOW}Aucun contact a supprimer.{RESET}\n")
+        print(f"\n  {YELLOW}{t('cli.no_contacts_del', lang=LANG)}{RESET}\n")
         return
 
-    confirm = safe_input(f"\n  Supprimer les {RED}{count}{RESET} contacts ? (oui/non): ").strip().lower()
-    if confirm in ("oui", "o", "yes", "y"):
+    confirm = safe_input(f"\n  {t('cli.delete_confirm', lang=LANG).format(n=count)}").strip().lower()
+    if confirm in CONFIRM_WORDS:
         deleted = await database.delete_all_contacts()
-        print(f"  {GREEN}✅ {deleted} contacts supprimes.{RESET}\n")
+        print(f"  {GREEN}{t('cli.deleted_n', lang=LANG).format(n=deleted)}{RESET}\n")
     else:
-        print(f"  {RED}Annule.{RESET}\n")
+        print(f"  {RED}{t('cli.cancelled', lang=LANG)}{RESET}\n")
 
 
 # -- Main Loop -------------------------------------------------
@@ -445,7 +455,7 @@ async def run_cli():
 
     while True:
         menu()
-        choice = safe_input(f"  {BOLD}Choix:{RESET} ").strip()
+        choice = safe_input(f"  {BOLD}{t('cli.choice', lang=LANG)}:{RESET} ").strip()
 
         if choice == "1":
             await cmd_import()
@@ -464,7 +474,7 @@ async def run_cli():
         elif choice == "8":
             await cmd_delete_contacts()
         elif choice == "0":
-            print(f"\n  {CYAN}Au revoir ! 👋{RESET}\n")
+            print(f"\n  {CYAN}{t('cli.goodbye', lang=LANG)}{RESET}\n")
             break
         else:
-            print(f"\n  {RED}Option invalide.{RESET}")
+            print(f"\n  {RED}{t('cli.invalid_option', lang=LANG)}{RESET}")
