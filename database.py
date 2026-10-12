@@ -1,11 +1,16 @@
 """
 WhatsApp Bulk Sender — Database Layer
-SQLite async database for contacts, campaigns, message logs, and templates.
+SQLite async database for users, contacts, campaigns, message logs, and templates.
+Multi-user: every data table carries user_id; admins can see all.
 """
 
 from __future__ import annotations
 
+import hashlib
+import hmac as hmac_lib
 import logging
+import os
+import secrets
 
 import aiosqlite
 from datetime import datetime
@@ -19,17 +24,30 @@ _DB = config.DB_PATH
 # -- Schema ---------------------------------------------------
 
 _SCHEMA = """
+CREATE TABLE IF NOT EXISTS users (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    username        TEXT UNIQUE NOT NULL,
+    password_hash   TEXT NOT NULL,
+    is_admin        INTEGER DEFAULT 0,
+    gowa_device_id  TEXT DEFAULT '',
+    device_name     TEXT DEFAULT '',
+    created_at      TEXT DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS contacts (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     INTEGER NOT NULL DEFAULT 1,
     first_name  TEXT DEFAULT 'Contact',
     last_name   TEXT DEFAULT '',
-    phone       TEXT UNIQUE NOT NULL,
+    phone       TEXT NOT NULL,
     email       TEXT DEFAULT '',
-    created_at  TEXT DEFAULT (datetime('now'))
+    created_at  TEXT DEFAULT (datetime('now')),
+    UNIQUE(user_id, phone)
 );
 
 CREATE TABLE IF NOT EXISTS campaigns (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     INTEGER NOT NULL DEFAULT 1,
     name        TEXT NOT NULL,
     message     TEXT DEFAULT '',
     status      TEXT DEFAULT 'draft',
@@ -47,6 +65,7 @@ CREATE TABLE IF NOT EXISTS campaign_contacts (
 
 CREATE TABLE IF NOT EXISTS message_log (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id         INTEGER NOT NULL DEFAULT 1,
     contact_id      INTEGER,
     campaign_id     INTEGER,
     phone           TEXT NOT NULL,
@@ -61,35 +80,87 @@ CREATE TABLE IF NOT EXISTS message_log (
 
 CREATE TABLE IF NOT EXISTS templates (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    name        TEXT UNIQUE NOT NULL,
+    user_id     INTEGER NOT NULL DEFAULT 1,
+    name        TEXT NOT NULL,
     category    TEXT DEFAULT 'general',
     body        TEXT NOT NULL,
-    created_at  TEXT DEFAULT (datetime('now'))
+    created_at  TEXT DEFAULT (datetime('now')),
+    UNIQUE(user_id, name)
 );
+"""
+
+# Migration pieces for databases created before multi-user (per-table, idempotent)
+_MIGRATE_CONTACTS = """
+PRAGMA foreign_keys=OFF;
+CREATE TABLE IF NOT EXISTS contacts_new (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     INTEGER NOT NULL DEFAULT 1,
+    first_name  TEXT DEFAULT 'Contact',
+    last_name   TEXT DEFAULT '',
+    phone       TEXT NOT NULL,
+    email       TEXT DEFAULT '',
+    created_at  TEXT DEFAULT (datetime('now')),
+    UNIQUE(user_id, phone)
+);
+INSERT OR IGNORE INTO contacts_new (id, user_id, first_name, last_name, phone, email, created_at)
+    SELECT id, 1, first_name, last_name, phone, email, created_at FROM contacts;
+DROP TABLE contacts;
+ALTER TABLE contacts_new RENAME TO contacts;
+PRAGMA foreign_keys=ON;
+"""
+
+_MIGRATE_TEMPLATES = """
+PRAGMA foreign_keys=OFF;
+CREATE TABLE IF NOT EXISTS templates_new (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     INTEGER NOT NULL DEFAULT 1,
+    name        TEXT NOT NULL,
+    category    TEXT DEFAULT 'general',
+    body        TEXT NOT NULL,
+    created_at  TEXT DEFAULT (datetime('now')),
+    UNIQUE(user_id, name)
+);
+INSERT OR IGNORE INTO templates_new (id, user_id, name, category, body, created_at)
+    SELECT id, 1, name, category, body, created_at FROM templates;
+DROP TABLE templates;
+ALTER TABLE templates_new RENAME TO templates;
+PRAGMA foreign_keys=ON;
 """
 
 _DEFAULT_TEMPLATES = [
     (
         "simple_hello",
         "general",
-        "Bonjour {first_name} ! Ceci est un message de la part de SoClose Society.",
+        "Halo {first_name}! Ini pesan dari kami. Ada yang bisa kami bantu?",
     ),
     (
         "promo",
         "broadcast",
         (
-            "Salut {first_name} !\n\n"
-            "Decouvrez nos derniers outils et projets open-source.\n"
-            "Plus d'infos sur https://soclose.co\n\n"
-            "A bientot !"
+            "Halo {first_name}!\n\n"
+            "Jangan lewatkan penawaran spesial kami bulan ini.\n"
+            "Balas pesan ini untuk info lebih lanjut.\n\n"
+            "Terima kasih!"
         ),
     ),
     (
         "reminder",
         "broadcast",
-        "Bonjour {first_name}, un petit rappel de SoClose Society. N'hesitez pas a nous contacter !",
+        "Halo {first_name}, ini pengingat dari kami. Jangan ragu untuk menghubungi kami kembali!",
     ),
 ]
+
+# Old French default bodies (replaced one-time on init if still untouched)
+_FRENCH_DEFAULT_BODIES = {
+    "simple_hello": "Bonjour {first_name} ! Ceci est un message de la part de SoClose Society.",
+    "promo": (
+        "Salut {first_name} !\n\n"
+        "Decouvrez nos derniers outils et projets open-source.\n"
+        "Plus d'infos sur https://soclose.co\n\n"
+        "A bientot !"
+    ),
+    "reminder": "Bonjour {first_name}, un petit rappel de SoClose Society. N'hesitez pas a nous contacter !",
+}
 
 
 # -- Connection helper ----------------------------------------
@@ -104,16 +175,191 @@ async def _connect() -> aiosqlite.Connection:
 
 # -- Init -----------------------------------------------------
 
+async def _table_columns(db: aiosqlite.Connection, table: str) -> set[str]:
+    cursor = await db.execute(f"PRAGMA table_info({table})")
+    return {row[1] for row in await cursor.fetchall()}
+
+
+async def _migrate_multiuser(db: aiosqlite.Connection):
+    """Upgrade pre-multi-user databases: add users table, user_id columns,
+    and convert phone/name uniques to per-user. Idempotent and safe on
+    partial databases (each table migrated only if it exists and lacks user_id)."""
+    for table, script in (("contacts", _MIGRATE_CONTACTS),
+                          ("templates", _MIGRATE_TEMPLATES)):
+        cols = await _table_columns(db, table)
+        if cols and "user_id" not in cols:
+            logger.info("Migrating table '%s' to multi-user schema...", table)
+            await db.executescript(script)
+            await db.commit()
+    for table in ("campaigns", "message_log"):
+        cols = await _table_columns(db, table)
+        if cols and "user_id" not in cols:
+            await db.execute(f"ALTER TABLE {table} ADD COLUMN user_id INTEGER NOT NULL DEFAULT 1")
+            await db.commit()
+            logger.info("Added user_id to %s", table)
+
+
 async def init():
-    """Create tables and seed default templates."""
+    """Create tables, migrate old DBs, seed admin + default templates."""
     db = await _connect()
     try:
         await db.executescript(_SCHEMA)
+        await _migrate_multiuser(db)
+        admin_id = await ensure_admin(db)
         for name, category, body in _DEFAULT_TEMPLATES:
             await db.execute(
-                "INSERT OR IGNORE INTO templates (name, category, body) VALUES (?, ?, ?)",
-                (name, category, body),
+                """INSERT OR IGNORE INTO templates (user_id, name, category, body)
+                   VALUES (?, ?, ?, ?)""",
+                (admin_id, name, category, body),
             )
+        # One-time repair: replace untouched French default bodies with Indonesian
+        for name, category, new_body in _DEFAULT_TEMPLATES:
+            old_body = _FRENCH_DEFAULT_BODIES.get(name)
+            if old_body:
+                await db.execute(
+                    "UPDATE templates SET body = ? WHERE name = ? AND body = ?",
+                    (new_body, name, old_body),
+                )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+# -- Users ----------------------------------------------------
+
+def hash_password(password: str) -> str:
+    """PBKDF2-SHA256 password hash (stdlib only)."""
+    salt = secrets.token_hex(16)
+    dk = hashlib.pbkdf2_hmac("sha256", password.encode(), bytes.fromhex(salt), 200_000)
+    return f"pbkdf2$200000${salt}${dk.hex()}"
+
+
+def verify_password(password: str, stored: str) -> bool:
+    try:
+        prefix, rounds, salt, hash_hex = stored.split("$")
+        if prefix != "pbkdf2":
+            return False
+        dk = hashlib.pbkdf2_hmac("sha256", password.encode(),
+                                 bytes.fromhex(salt), int(rounds))
+        return hmac_lib.compare_digest(dk.hex(), hash_hex)
+    except Exception:
+        return False
+
+
+async def ensure_admin(db: aiosqlite.Connection | None = None) -> int:
+    """Create the admin user from env on first run. Returns admin user id."""
+    own = db is None
+    if own:
+        db = await _connect()
+    try:
+        cursor = await db.execute("SELECT id FROM users WHERE is_admin = 1 LIMIT 1")
+        row = await cursor.fetchone()
+        if row:
+            return row[0]
+        username = (os.getenv("ADMIN_USERNAME") or "admin").strip() or "admin"
+        password = os.getenv("ADMIN_PASSWORD") or config.DASHBOARD_PASSWORD or ""
+        if not password:
+            password = secrets.token_urlsafe(16)
+            logger.warning("ADMIN_PASSWORD/DASHBOARD_PASSWORD not set — generated random admin password: %s", password)
+        cursor = await db.execute(
+            "INSERT INTO users (username, password_hash, is_admin) VALUES (?, ?, 1)",
+            (username, hash_password(password)),
+        )
+        await db.commit()
+        logger.info("Created admin user '%s' (id %s)", username, cursor.lastrowid)
+        return cursor.lastrowid or 1
+    finally:
+        if own:
+            await db.close()
+
+
+async def create_user(username: str, password: str, is_admin: bool = False) -> int | None:
+    """Create a user. Returns id, or None if username taken."""
+    db = await _connect()
+    try:
+        cursor = await db.execute(
+            "INSERT INTO users (username, password_hash, is_admin) VALUES (?, ?, ?)",
+            (username.strip(), hash_password(password), 1 if is_admin else 0),
+        )
+        await db.commit()
+        return cursor.lastrowid
+    except Exception:
+        return None
+    finally:
+        await db.close()
+
+
+async def get_user_by_username(username: str) -> dict | None:
+    db = await _connect()
+    try:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute("SELECT * FROM users WHERE username = ?", (username.strip(),))
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+    finally:
+        await db.close()
+
+
+async def get_user(user_id: int) -> dict | None:
+    db = await _connect()
+    try:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute("SELECT * FROM users WHERE id = ?", (user_id,))
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+    finally:
+        await db.close()
+
+
+async def get_all_users() -> list[dict]:
+    db = await _connect()
+    try:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT id, username, is_admin, gowa_device_id, device_name, created_at FROM users ORDER BY id"
+        )
+        return [dict(row) for row in await cursor.fetchall()]
+    finally:
+        await db.close()
+
+
+async def delete_user(user_id: int) -> bool:
+    """Delete a user and all their data. Returns False if user is admin."""
+    db = await _connect()
+    try:
+        cursor = await db.execute("SELECT is_admin FROM users WHERE id = ?", (user_id,))
+        row = await cursor.fetchone()
+        if not row or row[0]:
+            return False
+        await db.execute("DELETE FROM campaign_contacts WHERE campaign_id IN (SELECT id FROM campaigns WHERE user_id = ?)", (user_id,))
+        await db.execute("DELETE FROM message_log WHERE user_id = ?", (user_id,))
+        await db.execute("DELETE FROM campaigns WHERE user_id = ?", (user_id,))
+        await db.execute("DELETE FROM contacts WHERE user_id = ?", (user_id,))
+        await db.execute("DELETE FROM templates WHERE user_id = ?", (user_id,))
+        await db.execute("DELETE FROM users WHERE id = ?", (user_id,))
+        await db.commit()
+        return True
+    finally:
+        await db.close()
+
+
+async def update_user_password(user_id: int, password: str) -> None:
+    db = await _connect()
+    try:
+        await db.execute("UPDATE users SET password_hash = ? WHERE id = ?",
+                         (hash_password(password), user_id))
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def set_user_device(user_id: int, device_id: str, device_name: str = "") -> None:
+    db = await _connect()
+    try:
+        await db.execute(
+            "UPDATE users SET gowa_device_id = ?, device_name = ? WHERE id = ?",
+            (device_id or "", device_name or "", user_id),
+        )
         await db.commit()
     finally:
         await db.close()

@@ -391,12 +391,12 @@ elif page == "templates":
             st.success(t("dash.template_created", lang).format(name=name))
             st.rerun()
 
-    for t in templates:
-        with st.expander(f"📄 {t['name']} [{t['category']}]"):
-            st.text(t["body"])
-            if st.button(f"{t('dash.delete_label', lang)} {t['name']}", key=f"del_{t['name']}"):
-                run_async(database.delete_template(t["name"]))
-                st.success(t("dash.template_deleted", lang).format(name=t["name"]))
+    for tpl in templates:
+        with st.expander(f"📄 {tpl['name']} [{tpl['category']}]"):
+            st.text(tpl["body"])
+            if st.button(f"{t('dash.delete_label', lang)} {tpl['name']}", key=f"del_{tpl['name']}"):
+                run_async(database.delete_template(tpl["name"]))
+                st.success(t("dash.template_deleted", lang).format(name=tpl["name"]))
                 st.rerun()
 
 
