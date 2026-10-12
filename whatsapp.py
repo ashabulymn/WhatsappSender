@@ -254,9 +254,28 @@ def _gowa_call(method: str, path: str, body: dict | None = None) -> dict:
         return {"code": "CONNECTION_ERROR", "message": str(e)}
 
 
-def gowa_create_device(name: str) -> dict:
-    """Create a device slot. Returns {'id': ...} on success."""
-    data = _gowa_call("POST", "/devices", {"name": name})
+def gowa_device_id_for(username: str) -> str:
+    """Deterministic GoWA device id based on the wasend username.
+
+    GoWA has no 'name' field on device slots — the slot id is the only
+    identifier we control, so we base it on the username.
+    """
+    import re
+    safe = re.sub(r"[^a-zA-Z0-9._@-]", "-", username.strip()) or "user"
+    return f"wasend-{safe}"
+
+
+def gowa_create_device(username: str) -> dict:
+    """Create a device slot named after the wasend username.
+
+    Returns {'ok', 'id'} on success.
+    """
+    data = _gowa_call("POST", "/devices", {"device_id": gowa_device_id_for(username)})
+    results = data.get("results") or {}
+    if data.get("code") == "SUCCESS" and results.get("id"):
+        return {"ok": True, "id": results["id"]}
+    # Fallback: let GoWA generate an id (e.g. id already taken)
+    data = _gowa_call("POST", "/devices", {})
     results = data.get("results") or {}
     if data.get("code") == "SUCCESS" and results.get("id"):
         return {"ok": True, "id": results["id"]}

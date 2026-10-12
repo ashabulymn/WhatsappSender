@@ -306,6 +306,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "device.pair_code": "Kode pairing",
         "device.code_help": "Buka WhatsApp → Pengaturan → Perangkat Tertaut → Tautkan Perangkat → Tautkan dengan nomor telepon, lalu masukkan kode ini.",
         "device.claim_title": "Tautkan perangkat yang sudah ada",
+        "device.claim_note": "Perangkat yang belum pernah ditautkan akan dibuat ulang dengan nama username Anda agar penamaan konsisten. Perangkat yang sudah tertaut dipakai apa adanya.",
         "device.use": "Gunakan",
         "device.auto_name": "Perangkat akan diberi nama sesuai username Anda: {n}",
         # =========================================================
@@ -728,6 +729,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "device.pair_code": "Pairing code",
         "device.code_help": "Open WhatsApp → Settings → Linked Devices → Link a Device → Link with phone number, then enter this code.",
         "device.claim_title": "Link an existing device",
+        "device.claim_note": "Devices never paired will be recreated under your username for consistent naming. Already-paired devices are used as-is.",
         "device.use": "Use",
         "device.auto_name": "The device will be named after your username: {n}",
         # =========================================================

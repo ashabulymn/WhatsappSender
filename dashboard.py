@@ -582,20 +582,35 @@ elif page == "device":
         # Claim an existing GoWA device slot
         claimed = run_async(database.get_claimed_device_ids())
         gdevs = gowa_list_devices()
-        unclaimed = [d for d in gdevs.get("devices", [])
-                     if d.get("id") not in claimed]
+        unclaimed = [d for d in gdevs if d.get("id") not in claimed]
         if unclaimed:
             with st.expander(t("device.claim_title", lang)):
+                st.caption(t("device.claim_note", lang))
                 for d in unclaimed:
                     cc1, cc2 = st.columns([3, 1])
-                    label = d.get("name") or d.get("id")
+                    label = d.get("display_name") or d.get("id")
                     state = "🟢" if d.get("state") == "logged_in" else "⚪"
                     cc1.write(f"{state} **{label}**\n\n`{d.get('id')}`")
                     if cc2.button(t("device.use", lang), key=f"claim_{d.get('id')}"):
-                        run_async(database.set_user_device(uid, d.get("id"), label))
-                        _refresh_user()
-                        st.success(t("device.linked", lang).format(n=label))
-                        st.rerun()
+                        if d.get("state") == "logged_in":
+                            # Already paired: link as-is (GoWA has no rename API;
+                            # deleting would break the pairing)
+                            run_async(database.set_user_device(uid, d.get("id"), label))
+                            _refresh_user()
+                            st.success(t("device.linked", lang).format(n=label))
+                            st.rerun()
+                        else:
+                            # Unpaired slot: recreate under the username so the
+                            # device id always matches the wasend user
+                            gowa_device_delete(d.get("id"))
+                            res = gowa_create_device(user["username"])
+                            if res["ok"]:
+                                st.session_state.pair_device_id = res["id"]
+                                st.session_state.pair_device_name = user["username"]
+                                st.rerun()
+                            else:
+                                st.error(t("device.create_failed", lang).format(
+                                    e=res["error"]))
         with st.expander(t("device.add", lang), expanded=True):
             st.caption(t("device.auto_name", lang).format(n=user["username"]))
             if st.button(t("device.add", lang), type="primary"):
