@@ -826,11 +826,20 @@ elif page == "admin" and is_admin:
                 st.error(t("admin.exists", lang))
 
     users = run_async(database.get_all_users())
+    _gmap = {d.get("id"): d for d in gowa_list_devices()}
     for u in users:
         with st.expander(f"{'👑' if u['is_admin'] else '👤'} {u['username']}"):
             c1, c2, c3 = st.columns(3)
             c1.markdown(f"**{t('admin.col_device', lang)}:** {u['device_count']} / {database.MAX_DEVICES_PER_USER}")
             c2.markdown(f"**{t('admin.col_created', lang)}:** {(u['created_at'] or '')[:10]}")
+            _udevs = run_async(database.get_user_devices(u["id"]))
+            if _udevs:
+                _dlines = []
+                for _dd in _udevs:
+                    _st8 = (_gmap.get(_dd["gowa_device_id"]) or {}).get("state", "?")
+                    _star = "⭐" if _dd["is_default"] else ""
+                    _dlines.append(f"{_star}{_dd['device_name'] or _dd['gowa_device_id']} ({_st8})")
+                st.markdown(f"**{t('admin.user_devices', lang)}** " + ", ".join(_dlines))
             b1, b2 = st.columns(2)
             with b1:
                 with st.popover(t("admin.reset_pw", lang)):
@@ -849,3 +858,41 @@ elif page == "admin" and is_admin:
                         st.rerun()
                 elif u["id"] == uid:
                     st.caption(t("admin.cannot_delete_self", lang))
+
+    st.subheader(t("admin.unclaimed_title", lang))
+    _claimed = run_async(database.get_claimed_device_ids())
+    _unclaimed = [d for d in _gmap.values() if d.get("id") not in _claimed]
+    if not _unclaimed:
+        st.caption(t("admin.none_unclaimed", lang))
+    for _ud in _unclaimed:
+        _ulabel = _ud.get("display_name") or _ud.get("id")
+        _ustate = _ud.get("state", "?")
+        _uicon = "🟢" if _ustate == "logged_in" else "⚪"
+        with st.expander(f"{_uicon} {_ulabel} — {_ustate}"):
+            _target = st.selectbox(
+                t("admin.assign_to", lang),
+                [u["username"] for u in users],
+                key=f"assign_{_ud.get('id')}",
+            )
+            if st.button(t("admin.assign_btn", lang), key=f"assignbtn_{_ud.get('id')}"):
+                _tuser = next(u for u in users if u["username"] == _target)
+                _gid = _ud.get("id")
+                try:
+                    if _ustate == "logged_in":
+                        run_async(database.add_user_device(_tuser["id"], _gid, _ulabel))
+                        run_async(database.touch_device_login(_gid))
+                    else:
+                        gowa_device_delete(_gid)
+                        _res = gowa_create_device(_tuser["username"])
+                        if not _res["ok"]:
+                            st.error(t("device.create_failed", lang).format(
+                                e=_res["error"]))
+                            st.stop()
+                        run_async(database.add_user_device(
+                            _tuser["id"], _res["id"], _tuser["username"]))
+                        _ulabel = _tuser["username"]
+                    st.success(t("admin.assigned", lang).format(d=_ulabel, u=_target))
+                    st.rerun()
+                except ValueError:
+                    st.error(t("device.max_reached", lang).format(
+                        n=database.MAX_DEVICES_PER_USER))
