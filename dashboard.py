@@ -25,7 +25,9 @@ from i18n import t, available_languages
 from whatsapp import (
     WhatsAppClient,
     gowa_create_device,
+    gowa_list_devices,
     gowa_device_login,
+    gowa_device_login_code,
     gowa_device_info,
     gowa_device_logout,
     gowa_device_delete,
@@ -577,43 +579,91 @@ elif page == "device":
                 st.rerun()
     else:
         st.info(t("device.none", lang))
+        # Claim an existing GoWA device slot
+        claimed = run_async(database.get_claimed_device_ids())
+        gdevs = gowa_list_devices()
+        unclaimed = [d for d in gdevs.get("devices", [])
+                     if d.get("id") not in claimed]
+        if unclaimed:
+            with st.expander(t("device.claim_title", lang)):
+                for d in unclaimed:
+                    cc1, cc2 = st.columns([3, 1])
+                    label = d.get("name") or d.get("id")
+                    state = "🟢" if d.get("state") == "logged_in" else "⚪"
+                    cc1.write(f"{state} **{label}**\n\n`{d.get('id')}`")
+                    if cc2.button(t("device.use", lang), key=f"claim_{d.get('id')}"):
+                        run_async(database.set_user_device(uid, d.get("id"), label))
+                        _refresh_user()
+                        st.success(t("device.linked", lang).format(n=label))
+                        st.rerun()
         with st.expander(t("device.add", lang), expanded=True):
-            dname = st.text_input(t("device.name_label", lang),
-                                  placeholder=t("device.name_ph", lang),
-                                  value=user["username"])
-            if st.button(t("device.add", lang), type="primary") and dname:
-                res = gowa_create_device(f"wasend-{user['username']}-{dname}")
+            st.caption(t("device.auto_name", lang).format(n=user["username"]))
+            if st.button(t("device.add", lang), type="primary"):
+                res = gowa_create_device(user["username"])
                 if res["ok"]:
                     st.session_state.pair_device_id = res["id"]
-                    st.session_state.pair_device_name = dname
+                    st.session_state.pair_device_name = user["username"]
                     st.rerun()
                 else:
                     st.error(t("device.create_failed", lang).format(e=res["error"]))
 
         pair_id = st.session_state.get("pair_device_id")
         if pair_id:
-            login = gowa_device_login(pair_id)
-            if login["ok"]:
-                st.markdown(t("device.scan_qr", lang))
-                st.image(login["qr_link"], width=280)
-                st.caption(t("device.waiting", lang))
-                cc1, cc2 = st.columns(2)
-                if cc1.button(t("device.qr_reload", lang)):
-                    st.rerun()
-                if cc2.button(t("device.check_status", lang)):
-                    info = gowa_device_info(pair_id)
-                    if info["ok"] and info.get("state") == "logged_in":
-                        run_async(database.set_user_device(
-                            uid, pair_id, st.session_state.get("pair_device_name", "")))
-                        st.session_state.pop("pair_device_id", None)
-                        _refresh_user()
-                        st.success(t("device.linked", lang).format(
-                            n=info.get("name") or pair_id))
+            method = st.radio(
+                "",
+                [t("device.method_qr", lang), t("device.method_code", lang)],
+                horizontal=True,
+                key="pair_method",
+            )
+            if method == t("device.method_qr", lang):
+                login = gowa_device_login(pair_id)
+                if login["ok"]:
+                    st.markdown(t("device.scan_qr", lang))
+                    st.image(login["qr_link"], width=280)
+                    st.caption(t("device.waiting", lang))
+                    cc1, cc2 = st.columns(2)
+                    if cc1.button(t("device.qr_reload", lang)):
                         st.rerun()
-                    else:
-                        st.info(f"{t('device.state', lang)}: {info.get('state', '?')}")
+                    if cc2.button(t("device.check_status", lang)):
+                        info = gowa_device_info(pair_id)
+                        if info["ok"] and info.get("state") == "logged_in":
+                            run_async(database.set_user_device(
+                                uid, pair_id, st.session_state.get("pair_device_name", "")))
+                            st.session_state.pop("pair_device_id", None)
+                            _refresh_user()
+                            st.success(t("device.linked", lang).format(
+                                n=info.get("name") or pair_id))
+                            st.rerun()
+                        else:
+                            st.info(f"{t('device.state', lang)}: {info.get('state', '?')}")
+                else:
+                    st.error(login["error"])
             else:
-                st.error(login["error"])
+                st.markdown(t("device.code_help", lang))
+                pphone = st.text_input(t("device.phone_label", lang),
+                                       placeholder=t("dash.phone_ph", lang),
+                                       key="pair_phone")
+                if st.button(t("device.get_code", lang), type="primary") and pphone:
+                    res = gowa_device_login_code(pair_id, pphone)
+                    if res["ok"]:
+                        st.session_state.pair_code = res["pair_code"]
+                    else:
+                        st.error(res["error"])
+                if st.session_state.get("pair_code"):
+                    st.markdown(f"### 🔢 `{st.session_state.pair_code}`")
+                    if st.button(t("device.check_status", lang), key="code_check"):
+                        info = gowa_device_info(pair_id)
+                        if info["ok"] and info.get("state") == "logged_in":
+                            run_async(database.set_user_device(
+                                uid, pair_id, st.session_state.get("pair_device_name", "")))
+                            st.session_state.pop("pair_device_id", None)
+                            st.session_state.pop("pair_code", None)
+                            _refresh_user()
+                            st.success(t("device.linked", lang).format(
+                                n=info.get("name") or pair_id))
+                            st.rerun()
+                        else:
+                            st.info(f"{t('device.state', lang)}: {info.get('state', '?')}")
 
 
 # -- Test Message Page -----------------------------------------

@@ -277,6 +277,18 @@ def gowa_device_login(device_id: str) -> dict:
     return {"ok": False, "error": data.get("message", "unknown error")}
 
 
+def gowa_device_login_code(device_id: str, phone: str) -> dict:
+    """Start pairing-code login. Returns {'pair_code'} — user enters it on their phone."""
+    import urllib.parse
+    digits = "".join(c for c in phone if c.isdigit())
+    data = _gowa_call("POST", f"/devices/{device_id}/login/code?phone={urllib.parse.quote(digits)}")
+    results = data.get("results") or {}
+    if data.get("code") == "SUCCESS" and results.get("pair_code"):
+        return {"ok": True, "pair_code": results["pair_code"],
+                "device_id": results.get("device_id", device_id)}
+    return {"ok": False, "error": data.get("message", "unknown error")}
+
+
 def gowa_device_info(device_id: str) -> dict:
     """Get device info including state (disconnected/connecting/connected/logged_in)."""
     data = _gowa_call("GET", f"/devices/{device_id}")

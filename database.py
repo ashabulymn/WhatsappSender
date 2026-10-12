@@ -207,6 +207,24 @@ async def init():
         await _migrate_multiuser(db)
         await _ensure_extra_tables(db)
         admin_id = await ensure_admin(db)
+        # Bootstrap: link admin to an existing GoWA device via env (one-time)
+        admin_device_id = (os.getenv("ADMIN_DEVICE_ID") or "").strip()
+        if admin_device_id:
+            cursor = await db.execute("SELECT gowa_device_id FROM users WHERE id = ?", (admin_id,))
+            row = await cursor.fetchone()
+            if row and not row[0]:
+                dname = ""
+                try:
+                    from whatsapp import gowa_device_info as _gdi
+                    info = _gdi(admin_device_id)
+                    if info.get("ok"):
+                        dname = info.get("name", "")
+                except Exception as e:
+                    logger.warning("ADMIN_DEVICE_ID lookup failed: %s", e)
+                await db.execute(
+                    "UPDATE users SET gowa_device_id = ?, device_name = ? WHERE id = ?",
+                    (admin_device_id, dname, admin_id))
+                logger.info("Linked admin to GoWA device %s", admin_device_id)
         for name, category, body in _DEFAULT_TEMPLATES:
             await db.execute(
                 """INSERT OR IGNORE INTO templates (user_id, name, category, body)
@@ -314,6 +332,12 @@ async def get_user_by_username(username: str) -> dict | None:
         return dict(row) if row else None
     finally:
         await db.close()
+
+
+async def get_claimed_device_ids() -> set[str]:
+    """All gowa_device_id currently claimed by wasend users."""
+    users = await get_all_users()
+    return {u["gowa_device_id"] for u in users if u.get("gowa_device_id")}
 
 
 async def get_admin_user() -> dict | None:

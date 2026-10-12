@@ -299,6 +299,15 @@ STRINGS: dict[str, dict[str, str]] = {
         "device.need_device": "Tautkan perangkat WhatsApp dulu di halaman Perangkat.",
         "device.create_failed": "Gagal membuat perangkat: {e}",
         "device.waiting": "Menunggu dipindai...",
+        "device.method_qr": "QR Code",
+        "device.method_code": "Kode nomor HP",
+        "device.phone_label": "Nomor WhatsApp",
+        "device.get_code": "Dapatkan kode",
+        "device.pair_code": "Kode pairing",
+        "device.code_help": "Buka WhatsApp → Pengaturan → Perangkat Tertaut → Tautkan Perangkat → Tautkan dengan nomor telepon, lalu masukkan kode ini.",
+        "device.claim_title": "Tautkan perangkat yang sudah ada",
+        "device.use": "Gunakan",
+        "device.auto_name": "Perangkat akan diberi nama sesuai username Anda: {n}",
         # =========================================================
         # Admin
         # =========================================================
@@ -712,6 +721,15 @@ STRINGS: dict[str, dict[str, str]] = {
         "device.need_device": "Link a WhatsApp device first on the Devices page.",
         "device.create_failed": "Failed to create device: {e}",
         "device.waiting": "Waiting to be scanned...",
+        "device.method_qr": "QR Code",
+        "device.method_code": "Phone number code",
+        "device.phone_label": "WhatsApp number",
+        "device.get_code": "Get code",
+        "device.pair_code": "Pairing code",
+        "device.code_help": "Open WhatsApp → Settings → Linked Devices → Link a Device → Link with phone number, then enter this code.",
+        "device.claim_title": "Link an existing device",
+        "device.use": "Use",
+        "device.auto_name": "The device will be named after your username: {n}",
         # =========================================================
         # Admin
         # =========================================================
