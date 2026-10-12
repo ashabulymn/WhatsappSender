@@ -426,7 +426,7 @@ elif page == "test":
 elif page == "config":
     st.title(t("dash.config_title", lang))
 
-    warnings = config.validate()
+    warnings = config.validate(lang)
     if warnings:
         for w in warnings:
             st.warning(w)

@@ -257,6 +257,18 @@ STRINGS: dict[str, dict[str, str]] = {
         "main.help_webhook": "Jalankan server webhook saja",
         "main.help_dashboard": "Jalankan dashboard Streamlit",
         # =========================================================
+        # Peringatan konfigurasi
+        # =========================================================
+        "cfgw.twilio_sid": "TWILIO_ACCOUNT_SID belum diisi",
+        "cfgw.twilio_token": "TWILIO_AUTH_TOKEN belum diisi",
+        "cfgw.twilio_from": "TWILIO_WHATSAPP_FROM belum diisi",
+        "cfgw.meta_phone_id": "WA_PHONE_NUMBER_ID belum diisi",
+        "cfgw.meta_token": "WA_ACCESS_TOKEN belum diisi",
+        "cfgw.gowa_url": "GOWA_BASE_URL belum diisi",
+        "cfgw.gowa_auth": "GOWA_USERNAME / GOWA_PASSWORD belum diisi (Basic Auth GoWA)",
+        "cfgw.unknown_provider": "WA_PROVIDER tidak dikenal: {p} (gunakan 'twilio', 'meta', atau 'gowa')",
+        "cfgw.rate": "WA_MESSAGES_PER_SECOND = {v}, harus > 0",
+        # =========================================================
         # Telegram bot
         # =========================================================
         "tg.access_denied": "⛔ Akses ditolak. Admin saja.",
@@ -572,6 +584,18 @@ STRINGS: dict[str, dict[str, str]] = {
         "main.help_telegram": "Run the Telegram bot + webhook",
         "main.help_webhook": "Run the webhook server only",
         "main.help_dashboard": "Run the Streamlit dashboard",
+        # =========================================================
+        # Configuration warnings
+        # =========================================================
+        "cfgw.twilio_sid": "TWILIO_ACCOUNT_SID not set",
+        "cfgw.twilio_token": "TWILIO_AUTH_TOKEN not set",
+        "cfgw.twilio_from": "TWILIO_WHATSAPP_FROM not set",
+        "cfgw.meta_phone_id": "WA_PHONE_NUMBER_ID not set",
+        "cfgw.meta_token": "WA_ACCESS_TOKEN not set",
+        "cfgw.gowa_url": "GOWA_BASE_URL not set",
+        "cfgw.gowa_auth": "GOWA_USERNAME / GOWA_PASSWORD not set (GoWA Basic Auth)",
+        "cfgw.unknown_provider": "Unknown WA_PROVIDER: {p} (use 'twilio', 'meta' or 'gowa')",
+        "cfgw.rate": "WA_MESSAGES_PER_SECOND is {v}, should be > 0",
         # =========================================================
         # Telegram bot
         # =========================================================

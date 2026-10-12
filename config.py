@@ -8,7 +8,7 @@ from __future__ import annotations
 import os
 from dotenv import load_dotenv
 
-from i18n import APP_LANG  # "id" | "en" (from APP_LANG env)
+from i18n import APP_LANG, t  # "id" | "en" (from APP_LANG env)
 
 load_dotenv()
 
@@ -74,31 +74,32 @@ WEBSITE_URL = os.getenv("WEBSITE_URL", "https://soclose.co")
 DASHBOARD_PASSWORD = os.getenv("DASHBOARD_PASSWORD", "")
 
 
-def validate() -> list[str]:
-    """Return a list of configuration warnings."""
+def validate(lang: str | None = None) -> list[str]:
+    """Return a list of configuration warnings (in the selected language)."""
+    lang = (lang or APP_LANG).lower()
     warnings = []
 
     if WA_PROVIDER == "twilio":
         if not TWILIO_ACCOUNT_SID:
-            warnings.append("TWILIO_ACCOUNT_SID not set")
+            warnings.append(t("cfgw.twilio_sid", lang))
         if not TWILIO_AUTH_TOKEN:
-            warnings.append("TWILIO_AUTH_TOKEN not set")
+            warnings.append(t("cfgw.twilio_token", lang))
         if not TWILIO_WHATSAPP_FROM:
-            warnings.append("TWILIO_WHATSAPP_FROM not set")
+            warnings.append(t("cfgw.twilio_from", lang))
     elif WA_PROVIDER == "meta":
         if not WA_PHONE_NUMBER_ID:
-            warnings.append("WA_PHONE_NUMBER_ID not set")
+            warnings.append(t("cfgw.meta_phone_id", lang))
         if not WA_ACCESS_TOKEN:
-            warnings.append("WA_ACCESS_TOKEN not set")
+            warnings.append(t("cfgw.meta_token", lang))
     elif WA_PROVIDER == "gowa":
         if not GOWA_BASE_URL:
-            warnings.append("GOWA_BASE_URL not set")
+            warnings.append(t("cfgw.gowa_url", lang))
         if not GOWA_USERNAME or not GOWA_PASSWORD:
-            warnings.append("GOWA_USERNAME / GOWA_PASSWORD not set (GoWA Basic Auth)")
+            warnings.append(t("cfgw.gowa_auth", lang))
     else:
-        warnings.append(f"Unknown WA_PROVIDER: {WA_PROVIDER} (use 'twilio', 'meta' or 'gowa')")
+        warnings.append(t("cfgw.unknown_provider", lang).format(p=WA_PROVIDER))
 
     if WA_MESSAGES_PER_SECOND <= 0:
-        warnings.append(f"WA_MESSAGES_PER_SECOND is {WA_MESSAGES_PER_SECOND}, should be > 0 (defaulting to 1)")
+        warnings.append(t("cfgw.rate", lang).format(v=WA_MESSAGES_PER_SECOND))
 
     return warnings
