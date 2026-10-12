@@ -167,7 +167,7 @@ elif page == "import":
     if uploaded and campaign_name:
         if st.button(t("dash.import_btn", lang), type="primary"):
             content = uploaded.read()
-            contacts, errors = csv_handler.parse_csv(content)
+            contacts, errors = csv_handler.parse_csv(content, lang=lang)
 
             if errors:
                 with st.expander(t("dash.warnings_n", lang).format(n=len(errors))):

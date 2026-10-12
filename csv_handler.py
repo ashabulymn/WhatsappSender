@@ -12,6 +12,8 @@ import logging
 import pandas as pd
 import phonenumbers
 
+from i18n import t, APP_LANG
+
 logger = logging.getLogger(__name__)
 
 # Maps common CSV column names to our internal fields
@@ -68,17 +70,19 @@ def normalize_phone(raw_phone: str, default_region: str = "FR") -> str | None:
     return None
 
 
-def parse_csv(file_content: bytes | str) -> tuple[list[dict], list[str]]:
+def parse_csv(file_content: bytes | str, lang: str | None = None) -> tuple[list[dict], list[str]]:
     """
     Parse a CSV file and extract contacts.
 
     Args:
         file_content: Raw CSV content (bytes or string)
+        lang: UI language ("id" | "en"); defaults to APP_LANG env
 
     Returns:
         (valid_contacts, errors) where valid_contacts is a list of
         {"first_name": ..., "last_name": ..., "phone": ..., "email": ...}
     """
+    lang = (lang or APP_LANG).lower()
     # Handle encoding
     if isinstance(file_content, bytes):
         for encoding in ("utf-8-sig", "utf-8", "latin-1"):
@@ -88,7 +92,7 @@ def parse_csv(file_content: bytes | str) -> tuple[list[dict], list[str]]:
             except UnicodeDecodeError:
                 continue
         else:
-            return [], ["Impossible de decoder le fichier CSV."]
+            return [], [t("csv.decode_error", lang)]
     else:
         text = file_content
 
@@ -96,10 +100,10 @@ def parse_csv(file_content: bytes | str) -> tuple[list[dict], list[str]]:
     try:
         df = pd.read_csv(io.StringIO(text), dtype=str, keep_default_na=False)
     except Exception as e:
-        return [], [f"Erreur de parsing CSV: {e}"]
+        return [], [t("csv.parse_error", lang).format(e=e)]
 
     if df.empty:
-        return [], ["Le fichier CSV est vide."]
+        return [], [t("csv.empty", lang)]
 
     # Map columns
     col_map = {}
@@ -111,7 +115,7 @@ def parse_csv(file_content: bytes | str) -> tuple[list[dict], list[str]]:
                 col_map[internal] = col
 
     if "phone" not in col_map:
-        return [], [f"Aucune colonne 'phone' trouvee. Colonnes disponibles: {', '.join(df.columns)}"]
+        return [], [t("csv.no_phone_col", lang).format(cols=", ".join(df.columns))]
 
     # Extract contacts
     contacts = []
@@ -125,7 +129,7 @@ def parse_csv(file_content: bytes | str) -> tuple[list[dict], list[str]]:
         phone = normalize_phone(raw_phone)
 
         if not phone:
-            errors.append(f"Ligne {line_num}: numero invalide '{raw_phone}'")
+            errors.append(t("csv.invalid_number", lang).format(n=line_num, phone=raw_phone))
             continue
 
         if phone in seen_phones:

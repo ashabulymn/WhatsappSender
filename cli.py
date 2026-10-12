@@ -125,7 +125,7 @@ async def cmd_import():
     with open(csv_path, "rb") as f:
         content = f.read()
 
-    contacts, errors = csv_handler.parse_csv(content)
+    contacts, errors = csv_handler.parse_csv(content, lang=LANG)
 
     if errors:
         print(f"\n  {YELLOW}{t('cli.warnings', lang=LANG).format(n=len(errors))}{RESET}")

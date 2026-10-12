@@ -20,6 +20,8 @@ import threading
 
 import config
 
+from i18n import t, APP_LANG
+
 # -- Logging ---------------------------------------------------
 
 logging.basicConfig(
@@ -59,8 +61,8 @@ def check_dependencies(mode: str = "cli"):
             missing.append(package)
 
     if missing:
-        print(f"\n❌ Packages manquants: {', '.join(missing)}")
-        print(f"   Installe-les avec: pip install -r requirements.txt\n")
+        print(f"\n{t('main.packages_missing', APP_LANG).format(pkgs=', '.join(missing))}")
+        print(f"{t('main.install_hint', APP_LANG)}\n")
         sys.exit(1)
 
 
@@ -156,23 +158,11 @@ def main():
     parser = argparse.ArgumentParser(
         description=f"{config.BOT_NAME} v{config.BOT_VERSION}",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Modes:
-  (default)     CLI interactif — import CSV, envoi en masse
-  --telegram    Bot Telegram + serveur webhook
-  --webhook     Serveur webhook seul (callbacks de livraison)
-  --dashboard   Dashboard web Streamlit
-
-Exemples:
-  python main.py                    # CLI
-  python main.py --telegram         # Production
-  python main.py --dashboard        # Web UI
-  python main.py --webhook          # API seule
-        """,
+        epilog=t("main.epilog", APP_LANG),
     )
-    parser.add_argument("--telegram", action="store_true", help="Lancer le bot Telegram + webhook")
-    parser.add_argument("--webhook", action="store_true", help="Lancer le serveur webhook seul")
-    parser.add_argument("--dashboard", action="store_true", help="Lancer le dashboard Streamlit")
+    parser.add_argument("--telegram", action="store_true", help=t("main.help_telegram", APP_LANG))
+    parser.add_argument("--webhook", action="store_true", help=t("main.help_webhook", APP_LANG))
+    parser.add_argument("--dashboard", action="store_true", help=t("main.help_dashboard", APP_LANG))
     args = parser.parse_args()
 
     # Determine mode and check dependencies
@@ -192,7 +182,7 @@ Exemples:
         run_dashboard_mode()
     elif args.telegram:
         if not config.TELEGRAM_BOT_TOKEN:
-            logger.error("TELEGRAM_BOT_TOKEN requis pour le mode Telegram")
+            logger.error(t("main.telegram_token_required", APP_LANG))
             sys.exit(1)
         asyncio.run(run_telegram_mode())
     elif args.webhook:

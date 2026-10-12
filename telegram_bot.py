@@ -183,7 +183,7 @@ async def import_csv(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     file = await doc.get_file()
     data = await file.download_as_bytearray()
-    contacts, errors = csv_handler.parse_csv(bytes(data))
+    contacts, errors = csv_handler.parse_csv(bytes(data), lang=LANG)
 
     if not contacts:
         err_text = "\n".join(errors[:3]) if errors else t("tg.no_valid", lang=LANG)

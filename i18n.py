@@ -228,6 +228,35 @@ STRINGS: dict[str, dict[str, str]] = {
         "cli.invalid_option": "Opsi tidak valid.",
         "cli.contacts_suffix": "kontak",
         # =========================================================
+        # CSV handler
+        # =========================================================
+        "csv.decode_error": "Tidak bisa mendekode file CSV.",
+        "csv.parse_error": "Galat parsing CSV: {e}",
+        "csv.empty": "File CSV kosong.",
+        "csv.no_phone_col": "Kolom 'phone' tidak ditemukan. Kolom tersedia: {cols}",
+        "csv.invalid_number": "Baris {n}: nomor tidak valid '{phone}'",
+        # =========================================================
+        # main.py (console)
+        # =========================================================
+        "main.packages_missing": "❌ Paket kurang: {pkgs}",
+        "main.install_hint": "   Instal dengan: pip install -r requirements.txt",
+        "main.telegram_token_required": "TELEGRAM_BOT_TOKEN diperlukan untuk mode Telegram",
+        "main.epilog": (
+            "\nMode:\n"
+            "  (default)     CLI interaktif — impor CSV, kirim massal\n"
+            "  --telegram    Bot Telegram + server webhook\n"
+            "  --webhook     Server webhook saja (callback pengiriman)\n"
+            "  --dashboard   Dashboard web Streamlit\n"
+            "\nContoh:\n"
+            "  python main.py                    # CLI\n"
+            "  python main.py --telegram         # Produksi\n"
+            "  python main.py --dashboard        # Web UI\n"
+            "  python main.py --webhook          # API saja\n        "
+        ),
+        "main.help_telegram": "Jalankan bot Telegram + webhook",
+        "main.help_webhook": "Jalankan server webhook saja",
+        "main.help_dashboard": "Jalankan dashboard Streamlit",
+        # =========================================================
         # Telegram bot
         # =========================================================
         "tg.access_denied": "⛔ Akses ditolak. Admin saja.",
@@ -514,6 +543,35 @@ STRINGS: dict[str, dict[str, str]] = {
         "cli.goodbye": "Goodbye! 👋",
         "cli.invalid_option": "Invalid option.",
         "cli.contacts_suffix": "contacts",
+        # =========================================================
+        # CSV handler
+        # =========================================================
+        "csv.decode_error": "Could not decode the CSV file.",
+        "csv.parse_error": "CSV parsing error: {e}",
+        "csv.empty": "The CSV file is empty.",
+        "csv.no_phone_col": "No 'phone' column found. Available columns: {cols}",
+        "csv.invalid_number": "Line {n}: invalid number '{phone}'",
+        # =========================================================
+        # main.py (console)
+        # =========================================================
+        "main.packages_missing": "❌ Missing packages: {pkgs}",
+        "main.install_hint": "   Install with: pip install -r requirements.txt",
+        "main.telegram_token_required": "TELEGRAM_BOT_TOKEN is required for Telegram mode",
+        "main.epilog": (
+            "\nModes:\n"
+            "  (default)     Interactive CLI — CSV import, bulk send\n"
+            "  --telegram    Telegram bot + webhook server\n"
+            "  --webhook     Webhook server only (delivery callbacks)\n"
+            "  --dashboard   Streamlit web dashboard\n"
+            "\nExamples:\n"
+            "  python main.py                    # CLI\n"
+            "  python main.py --telegram         # Production\n"
+            "  python main.py --dashboard        # Web UI\n"
+            "  python main.py --webhook          # API only\n        "
+        ),
+        "main.help_telegram": "Run the Telegram bot + webhook",
+        "main.help_webhook": "Run the webhook server only",
+        "main.help_dashboard": "Run the Streamlit dashboard",
         # =========================================================
         # Telegram bot
         # =========================================================
