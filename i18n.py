@@ -126,6 +126,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "dash.cfg_provider": "Penyedia",
         "dash.cfg_webhook_port": "Port Webhook",
         "dash.cfg_rate_limit": "Batas laju",
+        "dash.cfg_delay_range": "Jeda acak",
         "dash.cfg_database": "Basis data",
 
         # =========================================================
@@ -268,6 +269,90 @@ STRINGS: dict[str, dict[str, str]] = {
         "cfgw.gowa_auth": "GOWA_USERNAME / GOWA_PASSWORD belum diisi (Basic Auth GoWA)",
         "cfgw.unknown_provider": "WA_PROVIDER tidak dikenal: {p} (gunakan 'twilio', 'meta', atau 'gowa')",
         "cfgw.rate": "WA_MESSAGES_PER_SECOND = {v}, harus > 0",
+        # =========================================================
+        # Auth (multi-user)
+        # =========================================================
+        "auth.login_title": "🔒 Masuk Wasend",
+        "auth.username": "Nama pengguna",
+        "auth.password": "Kata sandi",
+        "auth.login_btn": "Masuk",
+        "auth.wrong": "Nama pengguna atau kata sandi salah.",
+        "auth.logout": "Keluar",
+        "auth.welcome": "Halo, {u}",
+        # =========================================================
+        # Perangkat
+        # =========================================================
+        "device.title": "📲 Perangkat WhatsApp",
+        "device.none": "Belum ada perangkat tertaut. Tautkan HP Anda untuk mulai mengirim.",
+        "device.add": "Tautkan perangkat baru",
+        "device.name_label": "Nama perangkat",
+        "device.name_ph": "cth: HP Bisnis",
+        "device.scan_qr": "Pindai QR ini dari WhatsApp (Pengaturan → Perangkat Tertaut → Tautkan Perangkat).",
+        "device.qr_reload": "Muat ulang QR",
+        "device.check_status": "Cek status",
+        "device.linked": "Tertaut: {n}",
+        "device.state": "Status",
+        "device.unlink": "Putuskan",
+        "device.delete": "Hapus perangkat",
+        "device.deleted": "Perangkat dihapus.",
+        "device.unlinked": "Perangkat diputus.",
+        "device.need_device": "Tautkan perangkat WhatsApp dulu di halaman Perangkat.",
+        "device.create_failed": "Gagal membuat perangkat: {e}",
+        "device.waiting": "Menunggu dipindai...",
+        # =========================================================
+        # Admin
+        # =========================================================
+        "admin.title": "👥 Admin — Pengguna",
+        "admin.create_user": "➕ Buat pengguna",
+        "admin.username": "Nama pengguna",
+        "admin.password": "Kata sandi",
+        "admin.create_btn": "Buat",
+        "admin.created": "Pengguna {u} dibuat.",
+        "admin.exists": "Nama pengguna sudah dipakai.",
+        "admin.delete": "Hapus",
+        "admin.deleted": "Pengguna dihapus.",
+        "admin.reset_pw": "Reset kata sandi",
+        "admin.new_password": "Kata sandi baru",
+        "admin.pw_updated": "Kata sandi diperbarui.",
+        "admin.cannot_delete_self": "Tidak bisa menghapus akun sendiri.",
+        "admin.view_all": "🔍 Lihat semua data",
+        "admin.user_filter": "Filter pengguna",
+        "admin.all_users": "Semua pengguna",
+        "admin.col_user": "Pengguna",
+        "admin.col_device": "Perangkat",
+        "admin.col_created": "Dibuat",
+        # =========================================================
+        # Jadwal
+        # =========================================================
+        "sched.title": "⏰ Pesan terjadwal",
+        "sched.new": "➕ Jadwalkan pesan",
+        "sched.phone": "Nomor tujuan",
+        "sched.message": "Isi pesan",
+        "sched.datetime": "Tanggal & jam kirim",
+        "sched.schedule_btn": "Jadwalkan",
+        "sched.scheduled": "Pesan dijadwalkan untuk {t}.",
+        "sched.cancel": "Batalkan",
+        "sched.cancelled": "Jadwal dibatalkan.",
+        "sched.status": "Status",
+        "sched.list_title": "Jadwal aktif",
+        "sched.empty": "Belum ada jadwal.",
+        "sched.past": "Waktu harus di masa depan.",
+        "sched.campaign": "Kampanye",
+        "sched.single": "Pesan tunggal",
+        # =========================================================
+        # Varian & jeda (anti-ban)
+        # =========================================================
+        "send.variants_label": "Varian pesan (satu dipilih acak per penerima)",
+        "send.variant_ph": "Tulis varian {n}... (bisa pakai {Halo|Hai} dan {first_name})",
+        "send.add_variant": "➕ Tambah varian",
+        "send.delay_label": "Jeda acak antar pesan (detik)",
+        "send.delay_min": "Min",
+        "send.delay_max": "Maks",
+        "send.preview_random": "🎲 Pratinjau acak",
+        "send.schedule_toggle": "Jadwalkan untuk nanti",
+        "dash.page_device": "Perangkat",
+        "dash.page_schedule": "Jadwal",
+        "dash.page_admin": "Admin",
         # =========================================================
         # Telegram bot
         # =========================================================
@@ -455,6 +540,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "dash.cfg_provider": "Provider",
         "dash.cfg_webhook_port": "Webhook Port",
         "dash.cfg_rate_limit": "Rate Limit",
+        "dash.cfg_delay_range": "Random delay",
         "dash.cfg_database": "Database",
         # =========================================================
         # CLI
@@ -596,6 +682,90 @@ STRINGS: dict[str, dict[str, str]] = {
         "cfgw.gowa_auth": "GOWA_USERNAME / GOWA_PASSWORD not set (GoWA Basic Auth)",
         "cfgw.unknown_provider": "Unknown WA_PROVIDER: {p} (use 'twilio', 'meta' or 'gowa')",
         "cfgw.rate": "WA_MESSAGES_PER_SECOND is {v}, should be > 0",
+        # =========================================================
+        # Auth (multi-user)
+        # =========================================================
+        "auth.login_title": "🔒 Sign in to Wasend",
+        "auth.username": "Username",
+        "auth.password": "Password",
+        "auth.login_btn": "Sign in",
+        "auth.wrong": "Wrong username or password.",
+        "auth.logout": "Log out",
+        "auth.welcome": "Hello, {u}",
+        # =========================================================
+        # Devices
+        # =========================================================
+        "device.title": "📲 WhatsApp Device",
+        "device.none": "No device linked yet. Link your phone to start sending.",
+        "device.add": "Link new device",
+        "device.name_label": "Device name",
+        "device.name_ph": "e.g. Business phone",
+        "device.scan_qr": "Scan this QR from WhatsApp (Settings → Linked Devices → Link a Device).",
+        "device.qr_reload": "Reload QR",
+        "device.check_status": "Check status",
+        "device.linked": "Linked: {n}",
+        "device.state": "Status",
+        "device.unlink": "Disconnect",
+        "device.delete": "Delete device",
+        "device.deleted": "Device deleted.",
+        "device.unlinked": "Device disconnected.",
+        "device.need_device": "Link a WhatsApp device first on the Devices page.",
+        "device.create_failed": "Failed to create device: {e}",
+        "device.waiting": "Waiting to be scanned...",
+        # =========================================================
+        # Admin
+        # =========================================================
+        "admin.title": "👥 Admin — Users",
+        "admin.create_user": "➕ Create user",
+        "admin.username": "Username",
+        "admin.password": "Password",
+        "admin.create_btn": "Create",
+        "admin.created": "User {u} created.",
+        "admin.exists": "Username already taken.",
+        "admin.delete": "Delete",
+        "admin.deleted": "User deleted.",
+        "admin.reset_pw": "Reset password",
+        "admin.new_password": "New password",
+        "admin.pw_updated": "Password updated.",
+        "admin.cannot_delete_self": "Cannot delete your own account.",
+        "admin.view_all": "🔍 View all data",
+        "admin.user_filter": "Filter user",
+        "admin.all_users": "All users",
+        "admin.col_user": "User",
+        "admin.col_device": "Device",
+        "admin.col_created": "Created",
+        # =========================================================
+        # Schedule
+        # =========================================================
+        "sched.title": "⏰ Scheduled messages",
+        "sched.new": "➕ Schedule message",
+        "sched.phone": "Recipient number",
+        "sched.message": "Message",
+        "sched.datetime": "Send date & time",
+        "sched.schedule_btn": "Schedule",
+        "sched.scheduled": "Message scheduled for {t}.",
+        "sched.cancel": "Cancel",
+        "sched.cancelled": "Schedule cancelled.",
+        "sched.status": "Status",
+        "sched.list_title": "Active schedules",
+        "sched.empty": "No schedules yet.",
+        "sched.past": "Time must be in the future.",
+        "sched.campaign": "Campaign",
+        "sched.single": "Single message",
+        # =========================================================
+        # Variants & delay (anti-ban)
+        # =========================================================
+        "send.variants_label": "Message variants (one randomly picked per recipient)",
+        "send.variant_ph": "Write variant {n}... (supports {Hello|Hi} and {first_name})",
+        "send.add_variant": "➕ Add variant",
+        "send.delay_label": "Random delay between messages (seconds)",
+        "send.delay_min": "Min",
+        "send.delay_max": "Max",
+        "send.preview_random": "🎲 Random preview",
+        "send.schedule_toggle": "Schedule for later",
+        "dash.page_device": "Devices",
+        "dash.page_schedule": "Scheduled",
+        "dash.page_admin": "Admin",
         # =========================================================
         # Telegram bot
         # =========================================================

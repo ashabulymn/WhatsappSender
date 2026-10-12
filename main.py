@@ -80,6 +80,10 @@ async def run_telegram_mode():
 
     await database.init()
 
+    # Resolve bot operating user (admin) for single-user mode
+    from telegram_bot import _resolve_bot_user
+    await _resolve_bot_user()
+
     # Mark as initialized so webhook lifespan doesn't double-init
     import webhook
     webhook.mark_initialized()

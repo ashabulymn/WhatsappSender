@@ -27,6 +27,18 @@ from i18n import t
 
 logger = logging.getLogger(__name__)
 wa_client = WhatsAppClient()
+# Operating user for bot single-user mode (resolved to admin at startup)
+BOT_UID = 1
+BOT_DEVICE = ""
+
+
+async def _resolve_bot_user():
+    global BOT_UID, BOT_DEVICE, wa_client
+    admin = await database.get_admin_user()
+    if admin:
+        BOT_UID = admin["id"]
+        BOT_DEVICE = admin.get("gowa_device_id") or ""
+        wa_client = WhatsAppClient(device_id=BOT_DEVICE)
 
 LANG = config.APP_LANG
 # Language-independent yes-words (id + en + legacy fr)
@@ -222,10 +234,11 @@ async def import_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
             last_name=c["last_name"],
             phone=c["phone"],
             email=c.get("email", ""),
+            user_id=BOT_UID,
         )
         contact_ids.append(cid)
 
-    campaign_id = await database.create_campaign(name=campaign_name)
+    campaign_id = await database.create_campaign(name=campaign_name, user_id=BOT_UID)
     await database.add_contacts_to_campaign(campaign_id, contact_ids)
 
     await status_msg.edit_text(
@@ -387,6 +400,7 @@ async def send_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         message_template=message,
         campaign_id=campaign_id,
         on_progress=on_progress,
+        user_id=BOT_UID,
     )
 
     if campaign_id:

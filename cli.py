@@ -33,6 +33,19 @@ LANG = config.APP_LANG
 CONFIRM_WORDS = {"ya", "y", "iya", "yes", "ok", "oui"}
 
 wa_client = WhatsAppClient()
+# Operating user for CLI single-user mode (resolved to admin after init)
+CLI_UID = 1
+CLI_DEVICE = ""
+
+
+async def _resolve_cli_user():
+    """Point CLI writes/reads at the admin user and their GoWA device."""
+    global CLI_UID, CLI_DEVICE, wa_client
+    admin = await database.get_admin_user()
+    if admin:
+        CLI_UID = admin["id"]
+        CLI_DEVICE = admin.get("gowa_device_id") or ""
+        wa_client = WhatsAppClient(device_id=CLI_DEVICE)
 
 
 # -- UI Helpers ------------------------------------------------
@@ -157,11 +170,12 @@ async def cmd_import():
             last_name=c["last_name"],
             phone=c["phone"],
             email=c.get("email", ""),
+            user_id=CLI_UID,
         )
         contact_ids.append(cid)
 
     # Create campaign and link contacts
-    campaign_id = await database.create_campaign(name=campaign_name, message="")
+    campaign_id = await database.create_campaign(name=campaign_name, message="", user_id=CLI_UID)
     await database.add_contacts_to_campaign(campaign_id, contact_ids)
 
     print(f"  {GREEN}{t('cli.imported_to', lang=LANG).format(n=len(contacts), name=campaign_name)}{RESET}")
@@ -310,6 +324,7 @@ async def cmd_send():
         message_template=message,
         campaign_id=campaign_id,
         on_progress=lambda cur, tot, st: progress_bar(cur, tot, st),
+        user_id=CLI_UID,
     )
 
     await database.update_campaign_status(campaign_id, "sent")
@@ -370,7 +385,7 @@ async def cmd_templates():
             lines.append(line)
         body = "\n".join(lines)
         if name and body:
-            await database.create_template(name, category, body)
+            await database.create_template(name, category, body, user_id=CLI_UID)
             print(f"\n  {GREEN}{t('cli.template_created', lang=LANG).format(name=name)}{RESET}\n")
         else:
             print(f"  {RED}{t('cli.cancelled', lang=LANG)}{RESET}\n")
@@ -451,6 +466,7 @@ async def cmd_delete_contacts():
 async def run_cli():
     """Main CLI loop."""
     await database.init()
+    await _resolve_cli_user()
     banner()
 
     while True:

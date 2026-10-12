@@ -205,6 +205,7 @@ async def init():
     try:
         await db.executescript(_SCHEMA)
         await _migrate_multiuser(db)
+        await _ensure_extra_tables(db)
         admin_id = await ensure_admin(db)
         for name, category, body in _DEFAULT_TEMPLATES:
             await db.execute(
@@ -300,6 +301,15 @@ async def get_user_by_username(username: str) -> dict | None:
         await db.close()
 
 
+async def get_admin_user() -> dict | None:
+    """Return the first admin user (used by CLI / Telegram bot single-user mode)."""
+    users = await get_all_users()
+    for u in users:
+        if u["is_admin"]:
+            return await get_user(u["id"])
+    return None
+
+
 async def get_user(user_id: int) -> dict | None:
     db = await _connect()
     try:
@@ -367,69 +377,93 @@ async def set_user_device(user_id: int, device_id: str, device_name: str = "") -
 
 # -- Contacts -------------------------------------------------
 
-async def upsert_contact(first_name: str, last_name: str, phone: str, email: str = "") -> int:
-    """Create or update a contact. Returns contact ID."""
+def _user_filter(user_id: int | None, alias: str = "") -> tuple[str, tuple]:
+    """SQL filter fragment for per-user isolation. None = admin sees all."""
+    prefix = f"{alias}." if alias else ""
+    if user_id is None:
+        return "", ()
+    return f"WHERE {prefix}user_id = ?", (user_id,)
+
+
+async def upsert_contact(first_name: str, last_name: str, phone: str,
+                         email: str = "", user_id: int = 1) -> int:
+    """Create or update a contact (per user). Returns contact ID."""
     db = await _connect()
     try:
         cursor = await db.execute(
-            """INSERT INTO contacts (first_name, last_name, phone, email)
-               VALUES (?, ?, ?, ?)
-               ON CONFLICT(phone) DO UPDATE SET
+            """INSERT INTO contacts (user_id, first_name, last_name, phone, email)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(user_id, phone) DO UPDATE SET
                  first_name = CASE WHEN excluded.first_name != 'Contact' THEN excluded.first_name ELSE contacts.first_name END,
                  last_name = CASE WHEN excluded.last_name != '' THEN excluded.last_name ELSE contacts.last_name END,
                  email = CASE WHEN excluded.email != '' THEN excluded.email ELSE contacts.email END""",
-            (first_name or "Contact", last_name or "", phone, email or ""),
+            (user_id, first_name or "Contact", last_name or "", phone, email or ""),
         )
         await db.commit()
-        # Always fetch the actual ID to avoid returning 0
-        row_cursor = await db.execute("SELECT id FROM contacts WHERE phone = ?", (phone,))
+        row_cursor = await db.execute(
+            "SELECT id FROM contacts WHERE user_id = ? AND phone = ?", (user_id, phone))
         row = await row_cursor.fetchone()
         return row[0] if row else 0
     finally:
         await db.close()
 
 
-async def get_contact_by_phone(phone: str) -> dict | None:
+async def get_contact_by_phone(phone: str, user_id: int | None = None) -> dict | None:
     db = await _connect()
     try:
         db.row_factory = aiosqlite.Row
-        cursor = await db.execute("SELECT * FROM contacts WHERE phone = ?", (phone,))
+        where, params = _user_filter(user_id)
+        where = where + (" AND " if where else "WHERE ") + "phone = ?"
+        cursor = await db.execute(f"SELECT * FROM contacts {where}", (*params, phone))
         row = await cursor.fetchone()
         return dict(row) if row else None
     finally:
         await db.close()
 
 
-async def get_all_contacts() -> list[dict]:
+async def get_all_contacts(user_id: int | None = None) -> list[dict]:
     db = await _connect()
     try:
         db.row_factory = aiosqlite.Row
-        cursor = await db.execute("SELECT * FROM contacts ORDER BY created_at DESC")
+        where, params = _user_filter(user_id)
+        cursor = await db.execute(
+            f"SELECT * FROM contacts {where} ORDER BY created_at DESC", params)
         return [dict(row) for row in await cursor.fetchall()]
     finally:
         await db.close()
 
 
-async def get_contact_count() -> int:
+async def get_contact_count(user_id: int | None = None) -> int:
     db = await _connect()
     try:
-        cursor = await db.execute("SELECT COUNT(*) FROM contacts")
+        where, params = _user_filter(user_id)
+        cursor = await db.execute(f"SELECT COUNT(*) FROM contacts {where}", params)
         row = await cursor.fetchone()
         return row[0]
     finally:
         await db.close()
 
 
-async def delete_all_contacts() -> int:
-    """Delete all contacts. Nullifies references in message_log."""
+async def delete_all_contacts(user_id: int | None = None) -> int:
+    """Delete contacts (per user, or all for admin). Nullifies message_log refs."""
     db = await _connect()
     try:
-        cursor = await db.execute("SELECT COUNT(*) FROM contacts")
+        where, params = _user_filter(user_id)
+        cursor = await db.execute(f"SELECT COUNT(*) FROM contacts {where}", params)
         row = await cursor.fetchone()
         count = row[0]
-        await db.execute("UPDATE message_log SET contact_id = NULL")
-        await db.execute("DELETE FROM campaign_contacts")
-        await db.execute("DELETE FROM contacts")
+        if user_id is None:
+            await db.execute("UPDATE message_log SET contact_id = NULL")
+            await db.execute("DELETE FROM campaign_contacts")
+            await db.execute("DELETE FROM contacts")
+        else:
+            ids = [r[0] for r in await (await db.execute(
+                "SELECT id FROM contacts WHERE user_id = ?", (user_id,))).fetchall()]
+            if ids:
+                q = ",".join("?" * len(ids))
+                await db.execute(f"UPDATE message_log SET contact_id = NULL WHERE contact_id IN ({q})", ids)
+                await db.execute(f"DELETE FROM campaign_contacts WHERE contact_id IN ({q})", ids)
+            await db.execute("DELETE FROM contacts WHERE user_id = ?", (user_id,))
         await db.commit()
         return count
     finally:
@@ -438,12 +472,12 @@ async def delete_all_contacts() -> int:
 
 # -- Campaigns ------------------------------------------------
 
-async def create_campaign(name: str, message: str = "") -> int:
+async def create_campaign(name: str, message: str = "", user_id: int = 1) -> int:
     db = await _connect()
     try:
         cursor = await db.execute(
-            "INSERT INTO campaigns (name, message) VALUES (?, ?)",
-            (name, message),
+            "INSERT INTO campaigns (user_id, name, message) VALUES (?, ?, ?)",
+            (user_id, name, message),
         )
         await db.commit()
         return cursor.lastrowid or 0
@@ -493,16 +527,19 @@ async def update_campaign_message(campaign_id: int, message: str) -> None:
         await db.close()
 
 
-async def get_all_campaigns() -> list[dict]:
+async def get_all_campaigns(user_id: int | None = None) -> list[dict]:
     db = await _connect()
     try:
         db.row_factory = aiosqlite.Row
+        where, params = _user_filter(user_id, "c")
         cursor = await db.execute(
-            """SELECT c.*, COUNT(cc.contact_id) as contact_count
+            f"""SELECT c.*, COUNT(cc.contact_id) as contact_count
                FROM campaigns c
                LEFT JOIN campaign_contacts cc ON c.id = cc.campaign_id
+               {where}
                GROUP BY c.id
-               ORDER BY c.created_at DESC"""
+               ORDER BY c.created_at DESC""",
+            params,
         )
         return [dict(row) for row in await cursor.fetchall()]
     finally:
@@ -571,14 +608,16 @@ async def log_message(
     contact_id: int | None = None,
     wa_message_id: str = "",
     error_message: str = "",
+    user_id: int = 1,
+    variant_id: int | None = None,
 ) -> int:
     db = await _connect()
     try:
         cursor = await db.execute(
             """INSERT INTO message_log
-               (contact_id, campaign_id, phone, content, status, wa_message_id, error_message)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (contact_id, campaign_id, phone, content, status, wa_message_id, error_message),
+               (user_id, contact_id, campaign_id, phone, content, status, wa_message_id, error_message, variant_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (user_id, contact_id, campaign_id, phone, content, status, wa_message_id, error_message, variant_id),
         )
         await db.commit()
         return cursor.lastrowid or 0
@@ -598,18 +637,21 @@ async def update_message_status(wa_message_id: str, status: str) -> None:
         await db.close()
 
 
-async def get_send_stats() -> dict:
-    """Get overall sending statistics."""
+async def get_send_stats(user_id: int | None = None) -> dict:
+    """Get overall sending statistics (per user, or all for admin)."""
     db = await _connect()
     try:
         stats = {}
+        where, params = _user_filter(user_id)
         for s in ("queued", "sent", "delivered", "read", "failed"):
             cursor = await db.execute(
-                "SELECT COUNT(*) FROM message_log WHERE status = ?", (s,)
+                f"SELECT COUNT(*) FROM message_log {where}"
+                + (" AND " if where else "WHERE ") + "status = ?",
+                (*params, s),
             )
             row = await cursor.fetchone()
             stats[s] = row[0]
-        cursor = await db.execute("SELECT COUNT(*) FROM message_log")
+        cursor = await db.execute(f"SELECT COUNT(*) FROM message_log {where}", params)
         row = await cursor.fetchone()
         stats["total"] = row[0]
         return stats
@@ -633,13 +675,14 @@ async def get_campaign_stats(campaign_id: int) -> dict:
         await db.close()
 
 
-async def get_recent_messages(limit: int = 20) -> list[dict]:
+async def get_recent_messages(limit: int = 20, user_id: int | None = None) -> list[dict]:
     db = await _connect()
     try:
         db.row_factory = aiosqlite.Row
+        where, params = _user_filter(user_id)
         cursor = await db.execute(
-            "SELECT * FROM message_log ORDER BY sent_at DESC LIMIT ?",
-            (limit,),
+            f"SELECT * FROM message_log {where} ORDER BY sent_at DESC LIMIT ?",
+            (*params, limit),
         )
         return [dict(row) for row in await cursor.fetchall()]
     finally:
@@ -648,44 +691,220 @@ async def get_recent_messages(limit: int = 20) -> list[dict]:
 
 # -- Templates ------------------------------------------------
 
-async def get_all_templates() -> list[dict]:
+async def get_all_templates(user_id: int | None = None) -> list[dict]:
     db = await _connect()
     try:
         db.row_factory = aiosqlite.Row
-        cursor = await db.execute("SELECT * FROM templates ORDER BY category, name")
+        where, params = _user_filter(user_id)
+        cursor = await db.execute(
+            f"SELECT * FROM templates {where} ORDER BY category, name", params)
         return [dict(row) for row in await cursor.fetchall()]
     finally:
         await db.close()
 
 
-async def get_template(name: str) -> dict | None:
+async def get_template(name: str, user_id: int | None = None) -> dict | None:
     db = await _connect()
     try:
         db.row_factory = aiosqlite.Row
-        cursor = await db.execute("SELECT * FROM templates WHERE name = ?", (name,))
+        where, params = _user_filter(user_id)
+        where = where + (" AND " if where else "WHERE ") + "name = ?"
+        cursor = await db.execute(f"SELECT * FROM templates {where}", (*params, name))
         row = await cursor.fetchone()
         return dict(row) if row else None
     finally:
         await db.close()
 
 
-async def create_template(name: str, category: str, body: str) -> None:
+async def create_template(name: str, category: str, body: str, user_id: int = 1) -> None:
     db = await _connect()
     try:
         await db.execute(
-            """INSERT INTO templates (name, category, body) VALUES (?, ?, ?)
-               ON CONFLICT(name) DO UPDATE SET category = excluded.category, body = excluded.body""",
-            (name, category, body),
+            """INSERT INTO templates (user_id, name, category, body) VALUES (?, ?, ?, ?)
+               ON CONFLICT(user_id, name) DO UPDATE SET category = excluded.category, body = excluded.body""",
+            (user_id, name, category, body),
         )
         await db.commit()
     finally:
         await db.close()
 
 
-async def delete_template(name: str) -> None:
+async def delete_template(name: str, user_id: int | None = None) -> None:
     db = await _connect()
     try:
-        await db.execute("DELETE FROM templates WHERE name = ?", (name,))
+        where, params = _user_filter(user_id)
+        where = where + (" AND " if where else "WHERE ") + "name = ?"
+        await db.execute(f"DELETE FROM templates {where}", (*params, name))
+        await db.commit()
+    finally:
+        await db.close()
+
+
+# -- Message Variants (anti-ban rotation) ---------------------
+
+_VARIANT_SCHEMA = """
+CREATE TABLE IF NOT EXISTS message_variants (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     INTEGER NOT NULL,
+    campaign_id INTEGER,
+    name        TEXT DEFAULT '',
+    body        TEXT NOT NULL,
+    weight      INTEGER DEFAULT 1,
+    created_at  TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (campaign_id) REFERENCES campaigns(id) ON DELETE CASCADE
+);
+"""
+
+_SCHEDULED_SCHEMA = """
+CREATE TABLE IF NOT EXISTS scheduled_messages (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id         INTEGER NOT NULL,
+    campaign_id     INTEGER,
+    phone           TEXT DEFAULT '',
+    content         TEXT DEFAULT '',
+    variant_id      INTEGER,
+    delay_min       REAL DEFAULT 15,
+    delay_max       REAL DEFAULT 30,
+    scheduled_at    TEXT NOT NULL,
+    status          TEXT DEFAULT 'pending',
+    attempts        INTEGER DEFAULT 0,
+    error_message   TEXT DEFAULT '',
+    created_at      TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (campaign_id) REFERENCES campaigns(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_scheduled_due ON scheduled_messages(status, scheduled_at);
+"""
+
+
+async def _ensure_extra_tables(db: aiosqlite.Connection):
+    await db.executescript(_VARIANT_SCHEMA)
+    await db.executescript(_SCHEDULED_SCHEMA)
+    # variant_id on message_log for audit (which variant was sent)
+    cols = await _table_columns(db, "message_log")
+    if "variant_id" not in cols:
+        await db.execute("ALTER TABLE message_log ADD COLUMN variant_id INTEGER")
+    cols = await _table_columns(db, "scheduled_messages")
+    for col, ddl in (("delay_min", "REAL DEFAULT 15"), ("delay_max", "REAL DEFAULT 30")):
+        if col not in cols:
+            await db.execute(f"ALTER TABLE scheduled_messages ADD COLUMN {col} {ddl}")
+    await db.commit()
+
+
+async def create_variant(user_id: int, body: str, campaign_id: int | None = None,
+                         name: str = "", weight: int = 1) -> int:
+    db = await _connect()
+    try:
+        await _ensure_extra_tables(db)
+        cursor = await db.execute(
+            "INSERT INTO message_variants (user_id, campaign_id, name, body, weight) VALUES (?, ?, ?, ?, ?)",
+            (user_id, campaign_id, name, body, max(1, weight)),
+        )
+        await db.commit()
+        return cursor.lastrowid or 0
+    finally:
+        await db.close()
+
+
+async def get_variants(user_id: int, campaign_id: int | None = None) -> list[dict]:
+    db = await _connect()
+    try:
+        await _ensure_extra_tables(db)
+        db.row_factory = aiosqlite.Row
+        if campaign_id is None:
+            cursor = await db.execute(
+                "SELECT * FROM message_variants WHERE user_id = ? AND campaign_id IS NULL ORDER BY id",
+                (user_id,))
+        else:
+            cursor = await db.execute(
+                "SELECT * FROM message_variants WHERE user_id = ? AND campaign_id = ? ORDER BY id",
+                (user_id, campaign_id))
+        return [dict(row) for row in await cursor.fetchall()]
+    finally:
+        await db.close()
+
+
+async def delete_variant(variant_id: int, user_id: int) -> None:
+    db = await _connect()
+    try:
+        await db.execute("DELETE FROM message_variants WHERE id = ? AND user_id = ?",
+                         (variant_id, user_id))
+        await db.commit()
+    finally:
+        await db.close()
+
+
+# -- Scheduled Messages ---------------------------------------
+
+async def schedule_message(user_id: int, scheduled_at: str, content: str = "",
+                           phone: str = "", campaign_id: int | None = None,
+                           delay_min: float = 15, delay_max: float = 30) -> int:
+    """Schedule a one-shot message or a full campaign. scheduled_at: ISO datetime."""
+    db = await _connect()
+    try:
+        await _ensure_extra_tables(db)
+        cursor = await db.execute(
+            """INSERT INTO scheduled_messages
+               (user_id, campaign_id, phone, content, scheduled_at, delay_min, delay_max)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (user_id, campaign_id, phone, content, scheduled_at, delay_min, delay_max),
+        )
+        await db.commit()
+        return cursor.lastrowid or 0
+    finally:
+        await db.close()
+
+
+async def get_due_scheduled(limit: int = 50) -> list[dict]:
+    """Pending schedules whose time has come."""
+    db = await _connect()
+    try:
+        await _ensure_extra_tables(db)
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """SELECT * FROM scheduled_messages
+               WHERE status = 'pending' AND scheduled_at <= datetime('now', 'localtime')
+               ORDER BY scheduled_at LIMIT ?""",
+            (limit,))
+        return [dict(row) for row in await cursor.fetchall()]
+    finally:
+        await db.close()
+
+
+async def get_scheduled(user_id: int | None = None, include_done: bool = False) -> list[dict]:
+    db = await _connect()
+    try:
+        await _ensure_extra_tables(db)
+        db.row_factory = aiosqlite.Row
+        where, params = _user_filter(user_id, "s")
+        if not include_done:
+            where = where + (" AND " if where else "WHERE ") + "s.status = 'pending'"
+        cursor = await db.execute(
+            f"""SELECT s.*, u.username FROM scheduled_messages s
+                LEFT JOIN users u ON u.id = s.user_id
+                {where} ORDER BY s.scheduled_at""", params)
+        return [dict(row) for row in await cursor.fetchall()]
+    finally:
+        await db.close()
+
+
+async def update_scheduled_status(sched_id: int, status: str, error: str = "") -> None:
+    db = await _connect()
+    try:
+        await db.execute(
+            "UPDATE scheduled_messages SET status = ?, attempts = attempts + 1, error_message = ? WHERE id = ?",
+            (status, error, sched_id))
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def cancel_scheduled(sched_id: int, user_id: int | None = None) -> None:
+    db = await _connect()
+    try:
+        where, params = _user_filter(user_id)
+        where = where + (" AND " if where else "WHERE ") + "id = ?"
+        await db.execute(f"UPDATE scheduled_messages SET status = 'cancelled' {where}",
+                         (*params, sched_id))
         await db.commit()
     finally:
         await db.close()

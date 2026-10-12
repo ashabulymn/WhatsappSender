@@ -1,12 +1,18 @@
 """
-WhatsApp Bulk Sender — Streamlit Web Dashboard
-Web interface for importing contacts, sending campaigns, and viewing stats.
-Bilingual UI (Indonesian / English) via i18n module.
+Wasend — Streamlit Web Dashboard (multi-user).
+
+- Login username/password (tabel users), admin bisa lihat semua data
+- Perangkat WhatsApp per user (QR pairing via GoWA)
+- Kirim campaign: varian pesan acak + jeda random (anti-ban) + jadwal
+- Scheduler background untuk pesan terjadwal
+- Bilingual UI (Indonesian / English) via i18n module.
 """
 
 import asyncio
-import hmac
+import logging
 import threading
+import time
+from datetime import datetime, timedelta
 
 import streamlit as st
 import pandas as pd
@@ -14,9 +20,18 @@ import pandas as pd
 import config
 import database
 import csv_handler
+import sender
 from i18n import t, available_languages
-from whatsapp import WhatsAppClient, _render_message
+from whatsapp import (
+    WhatsAppClient,
+    gowa_create_device,
+    gowa_device_login,
+    gowa_device_info,
+    gowa_device_logout,
+    gowa_device_delete,
+)
 
+logger = logging.getLogger(__name__)
 
 # -- Async Bridge ----------------------------------------------
 
@@ -29,7 +44,7 @@ def run_async(coro):
     """Run an async coroutine from sync Streamlit context."""
     future = asyncio.run_coroutine_threadsafe(coro, _loop)
     try:
-        return future.result(timeout=30)
+        return future.result(timeout=60)
     except TimeoutError:
         future.cancel()
         raise RuntimeError("Database operation timed out")
@@ -41,58 +56,130 @@ def init_db():
         st.session_state.db_init = True
 
 
+# -- Background Scheduler --------------------------------------
+
+def _process_scheduled(s: dict):
+    """Send one due scheduled item. Runs in scheduler thread via run_async."""
+    user = run_async(database.get_user(s["user_id"]))
+    if not user:
+        run_async(database.update_scheduled_status(s["id"], "failed", "user not found"))
+        return
+    device_id = user.get("gowa_device_id") or ""
+    if not device_id:
+        run_async(database.update_scheduled_status(s["id"], "failed", "no device linked"))
+        return
+    try:
+        if s.get("campaign_id"):
+            result = run_async(sender.send_campaign(
+                user_id=s["user_id"],
+                campaign_id=s["campaign_id"],
+                delay_min=s.get("delay_min") or config.GOWA_DELAY_MIN_SECONDS,
+                delay_max=s.get("delay_max") or config.GOWA_DELAY_MAX_SECONDS,
+                device_id=device_id,
+            ))
+            err = "" if result["failed"] == 0 else f"{result['failed']} failed"
+            run_async(database.update_scheduled_status(
+                s["id"], "sent" if result["failed"] == 0 else "failed", err))
+        else:
+            result = run_async(sender.send_single(
+                user_id=s["user_id"], phone=s["phone"], content=s["content"],
+                device_id=device_id))
+            run_async(database.update_scheduled_status(
+                s["id"], result["status"], result.get("error", "")))
+    except Exception as e:
+        logger.error(f"Scheduler failed for #{s['id']}: {e}")
+        run_async(database.update_scheduled_status(s["id"], "failed", str(e)[:200]))
+
+
+def _scheduler_loop():
+    while True:
+        try:
+            due = run_async(database.get_due_scheduled(50))
+            for s in due:
+                _process_scheduled(s)
+        except Exception as e:
+            logger.error(f"Scheduler tick failed: {e}")
+        time.sleep(30)
+
+
+def start_scheduler():
+    global _scheduler_started
+    try:
+        _scheduler_started
+    except NameError:
+        _scheduler_started = False
+    if not _scheduler_started:
+        _scheduler_started = True
+        th = threading.Thread(target=_scheduler_loop, daemon=True)
+        th.start()
+        logger.info("Wasend scheduler started (30s tick)")
+
+
 # -- Page Config -----------------------------------------------
 
 st.set_page_config(
-    page_title=config.BOT_NAME,
+    page_title="Wasend",
     page_icon="📱",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
 # -- Language --------------------------------------------------
-# Default from APP_LANG env; user can switch per-session in the sidebar.
 if "lang" not in st.session_state:
     st.session_state.lang = config.APP_LANG
 lang = st.session_state.lang
 
 # -- Authentication Gate ---------------------------------------
 
-if config.DASHBOARD_PASSWORD:
-    if "authenticated" not in st.session_state:
-        st.session_state.authenticated = False
-
-    if not st.session_state.authenticated:
-        st.title(t("dash.auth_title", lang))
-        st.markdown(t("dash.auth_prompt", lang))
-        password = st.text_input(t("dash.auth_password", lang), type="password")
-        if st.button(t("dash.auth_login", lang)):
-            if hmac.compare_digest(password, config.DASHBOARD_PASSWORD):
-                st.session_state.authenticated = True
-                st.rerun()
-            else:
-                st.error(t("dash.auth_wrong", lang))
-        st.stop()
-
 init_db()
+start_scheduler()
 
+
+def _refresh_user():
+    st.session_state.user = run_async(database.get_user(st.session_state.user["id"]))
+
+
+if "user" not in st.session_state:
+    st.session_state.user = None
+
+if not st.session_state.user:
+    st.title(t("auth.login_title", lang))
+    username = st.text_input(t("auth.username", lang))
+    password = st.text_input(t("auth.password", lang), type="password")
+    if st.button(t("auth.login_btn", lang)):
+        u = run_async(database.get_user_by_username(username))
+        if u and database.verify_password(password, u["password_hash"]):
+            st.session_state.user = u
+            st.rerun()
+        else:
+            st.error(t("auth.wrong", lang))
+    st.stop()
+
+user = st.session_state.user
+uid = user["id"]
+is_admin = bool(user.get("is_admin"))
+device_id = user.get("gowa_device_id") or ""
 
 # -- Sidebar ---------------------------------------------------
 
 with st.sidebar:
-    st.title(t("dash.sidebar_title", lang))
+    st.title("📱 Wasend")
     st.caption(f"v{config.BOT_VERSION} | {config.WA_PROVIDER.upper()}")
+    st.markdown(t("auth.welcome", lang).format(u=user["username"]))
+    if is_admin:
+        view_all = st.checkbox(t("admin.view_all", lang), key="view_all")
+    else:
+        view_all = False
+    if st.button(t("auth.logout", lang)):
+        st.session_state.user = None
+        st.rerun()
 
     # Language toggle
     lang_codes = [code for code, _ in available_languages()]
     lang_labels = [label for _, label in available_languages()]
     current_idx = lang_codes.index(lang) if lang in lang_codes else 0
-    picked = st.selectbox(
-        t("dash.lang_label", lang),
-        lang_labels,
-        index=current_idx,
-        key="lang_picker",
-    )
+    picked = st.selectbox(t("dash.lang_label", lang), lang_labels,
+                          index=current_idx, key="lang_picker")
     new_lang = lang_codes[lang_labels.index(picked)]
     if new_lang != lang:
         st.session_state.lang = new_lang
@@ -103,12 +190,16 @@ with st.sidebar:
         ("dashboard", t("dash.page_dashboard", lang)),
         ("import", t("dash.page_import", lang)),
         ("send", t("dash.page_send", lang)),
+        ("schedule", t("dash.page_schedule", lang)),
         ("contacts", t("dash.page_contacts", lang)),
         ("stats", t("dash.page_stats", lang)),
         ("templates", t("dash.page_templates", lang)),
+        ("device", t("dash.page_device", lang)),
         ("test", t("dash.page_test", lang)),
         ("config", t("dash.page_config", lang)),
     ]
+    if is_admin:
+        pages.append(("admin", t("dash.page_admin", lang)))
     labels = [label for _, label in pages]
     choice = st.radio(t("dash.nav", lang), labels)
     page = pages[labels.index(choice)][0]
@@ -116,15 +207,26 @@ with st.sidebar:
     st.divider()
     st.markdown(f"[GitHub]({config.COMMUNITY_URL}) | [Site]({config.WEBSITE_URL})")
 
+# view_uid: None = admin melihat semua
+view_uid = None if (is_admin and view_all) else uid
+
+
+def _need_device() -> bool:
+    """Warn if user has no linked device. Returns True when blocked."""
+    if not device_id:
+        st.warning(t("device.need_device", lang))
+        return True
+    return False
+
 
 # -- Dashboard Page --------------------------------------------
 
 if page == "dashboard":
     st.title(t("dash.page_dashboard", lang))
 
-    contact_count = run_async(database.get_contact_count())
-    campaigns = run_async(database.get_all_campaigns())
-    stats = run_async(database.get_send_stats())
+    contact_count = run_async(database.get_contact_count(view_uid))
+    campaigns = run_async(database.get_all_campaigns(view_uid))
+    stats = run_async(database.get_send_stats(view_uid))
 
     col1, col2, col3, col4 = st.columns(4)
     col1.metric(t("dash.metric_contacts", lang), contact_count)
@@ -142,7 +244,6 @@ if page == "dashboard":
     col7.metric(t("dash.metric_read", lang), stats.get("read", 0))
     col8.metric(t("dash.metric_total", lang), stats.get("total", 0))
 
-    # Recent campaigns
     st.divider()
     st.subheader(t("dash.recent_campaigns", lang))
     if campaigns:
@@ -183,15 +284,15 @@ elif page == "import":
                             last_name=c["last_name"],
                             phone=c["phone"],
                             email=c.get("email", ""),
+                            user_id=uid,
                         ))
                         contact_ids.append(cid)
 
-                    campaign_id = run_async(database.create_campaign(name=campaign_name, message=""))
+                    campaign_id = run_async(database.create_campaign(
+                        name=campaign_name, message="", user_id=uid))
                     run_async(database.add_contacts_to_campaign(campaign_id, contact_ids))
 
                 st.success(t("dash.imported_n", lang).format(n=len(contacts), name=campaign_name))
-
-                # Preview
                 df = pd.DataFrame(contacts)
                 st.dataframe(df.head(20), use_container_width=True)
             else:
@@ -202,17 +303,18 @@ elif page == "import":
     st.code("phone,first_name,last_name,email\n+6281234567890,Budi,Santoso,budi@email.com\n+6289876543210,Siti,Aminah,", language="csv")
 
 
-# -- Send Page -------------------------------------------------
+# -- Send Page (variants + random delay + schedule) ------------
 
 elif page == "send":
     st.title(t("dash.send_title", lang))
+    if _need_device():
+        st.stop()
 
-    campaigns = run_async(database.get_all_campaigns())
+    campaigns = run_async(database.get_all_campaigns(view_uid))
     if not campaigns:
         st.warning(t("dash.no_campaign_import_first", lang))
         st.stop()
 
-    # Select campaign
     campaign_options = {
         f"{c['name']} ({c.get('contact_count', 0)} {t('dash.contacts_suffix', lang)}) [{c['status']}]": c["id"]
         for c in campaigns
@@ -223,96 +325,144 @@ elif page == "send":
     contacts = run_async(database.get_contacts_for_campaign(campaign_id))
     st.info(t("dash.contacts_in_this_campaign", lang).format(n=len(contacts)))
 
-    # Template selector
-    templates = run_async(database.get_all_templates())
-    write_msg = t("dash.write_message", lang)
-    template_names = [write_msg] + [t["name"] for t in templates]
-    selected_tpl = st.selectbox(t("dash.template_label", lang), template_names)
+    # --- Message variants ---
+    st.subheader(t("send.variants_label", lang))
+    if "variant_count" not in st.session_state:
+        st.session_state.variant_count = 1
+    # preload saved variants for this campaign
+    if st.session_state.get("variant_campaign") != campaign_id:
+        saved = run_async(database.get_variants(uid, campaign_id))
+        st.session_state.variant_count = max(1, len(saved))
+        for i, v in enumerate(saved):
+            st.session_state[f"variant_{i}"] = v["body"]
+        st.session_state.variant_campaign = campaign_id
 
-    default_msg = ""
-    if selected_tpl != write_msg:
-        tpl = next((t for t in templates if t["name"] == selected_tpl), None)
-        if tpl:
-            default_msg = tpl["body"]
+    variants_input = []
+    for i in range(st.session_state.variant_count):
+        txt = st.text_area(
+            f"Varian {i + 1}",
+            key=f"variant_{i}",
+            height=120,
+            placeholder=t("send.variant_ph", lang).format(n=i + 1),
+            help=t("dash.placeholders_help", lang),
+        )
+        if txt.strip():
+            variants_input.append(txt.strip())
+    if st.button(t("send.add_variant", lang)):
+        st.session_state.variant_count += 1
+        st.rerun()
 
-    message = st.text_area(
-        t("dash.message_label", lang),
-        value=default_msg,
-        height=200,
-        help=t("dash.placeholders_help", lang),
-    )
-
-    if message and contacts:
+    if st.button(t("send.preview_random", lang)) and variants_input and contacts:
         sample = contacts[0]
-        preview = _render_message(message, {
-            "first_name": sample.get("first_name", "Contact"),
-            "last_name": sample.get("last_name", ""),
-            "phone": sample.get("phone", ""),
-            "name": f"{sample.get('first_name', '')} {sample.get('last_name', '')}".strip(),
-        })
-        st.markdown(t("dash.preview_label", lang))
-        st.text(preview)
+        v = sender.pick_variant([{"body": b, "weight": 1} for b in variants_input])
+        st.text(sender.render_message(v["body"], sample))
 
-    col1, col2 = st.columns(2)
-    dry_run = col1.checkbox(t("dash.dry_run", lang), value=True)
+    # --- Random delay range ---
+    st.subheader(t("send.delay_label", lang))
+    dcol1, dcol2 = st.columns(2)
+    delay_min = dcol1.number_input(t("send.delay_min", lang), min_value=1.0, value=15.0, step=1.0)
+    delay_max = dcol2.number_input(t("send.delay_max", lang), min_value=1.0, value=30.0, step=1.0)
+    if delay_max < delay_min:
+        delay_max = delay_min
 
-    if col2.button(t("dash.send_btn", lang), type="primary", disabled=not message or not contacts):
-        if dry_run:
-            st.warning(t("dash.dry_run_msg", lang).format(n=len(contacts)))
+    # --- Send now or schedule ---
+    schedule_it = st.checkbox(t("send.schedule_toggle", lang))
+    sched_dt = None
+    if schedule_it:
+        scol1, scol2 = st.columns(2)
+        sdate = scol1.date_input(t("sched.datetime", lang), value=datetime.now().date())
+        stime = scol2.time_input("", value=(datetime.now() + timedelta(hours=1)).time())
+        sched_dt = datetime.combine(sdate, stime)
+
+    btn_label = t("sched.schedule_btn", lang) if schedule_it else t("dash.send_btn", lang)
+    if st.button(btn_label, type="primary", disabled=not variants_input or not contacts):
+        if schedule_it:
+            if sched_dt <= datetime.now():
+                st.error(t("sched.past", lang))
+            else:
+                # save variants then schedule
+                for v in run_async(database.get_variants(uid, campaign_id)):
+                    run_async(database.delete_variant(v["id"], uid))
+                for b in variants_input:
+                    run_async(database.create_variant(uid, b, campaign_id))
+                run_async(database.schedule_message(
+                    uid, sched_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                    campaign_id=campaign_id,
+                    content="", phone="",
+                    delay_min=delay_min, delay_max=delay_max))
+                # store delay on the schedule row
+                st.success(t("sched.scheduled", lang).format(t=sched_dt.strftime("%d %b %Y %H:%M")))
         else:
-            run_async(database.update_campaign_message(campaign_id, message))
-            wa = WhatsAppClient()
-            recipients = [
-                {
-                    "phone": c["phone"],
-                    "first_name": c.get("first_name", "Contact"),
-                    "last_name": c.get("last_name", ""),
-                    "id": c.get("id"),
-                }
-                for c in contacts
-            ]
-
+            # save variants
+            for v in run_async(database.get_variants(uid, campaign_id)):
+                run_async(database.delete_variant(v["id"], uid))
+            db_variants = []
+            for b in variants_input:
+                vid = run_async(database.create_variant(uid, b, campaign_id))
+                db_variants.append({"id": vid, "body": b, "weight": 1})
             progress = st.progress(0)
             status_text = st.empty()
 
-            sent = 0
-            failed = 0
-            for i, r in enumerate(recipients):
-                body = _render_message(message, {
-                    "first_name": r.get("first_name", "Contact"),
-                    "last_name": r.get("last_name", ""),
-                    "phone": r.get("phone", ""),
-                    "name": f"{r.get('first_name', '')} {r.get('last_name', '')}".strip(),
-                })
-                result = run_async(wa.send_message(r["phone"], body))
-                run_async(database.log_message(
-                    phone=r["phone"],
-                    content=body[:500],
-                    status=result["status"],
-                    campaign_id=campaign_id,
-                    contact_id=r.get("id"),
-                    wa_message_id=result.get("sid", ""),
-                    error_message=result.get("error", ""),
-                ))
-                if result["status"] == "sent":
-                    sent += 1
-                else:
-                    failed += 1
-                progress.progress((i + 1) / len(recipients))
-                status_text.text(t("dash.sending_progress", lang).format(
-                    i=i + 1, total=len(recipients), s=sent, f=failed))
+            def _on_progress(i, total, phone):
+                progress.progress(i / total)
+                status_text.text(t("dash.sending_progress", lang).format(i=i, total=total, s="", f=""))
 
-            run_async(database.update_campaign_status(campaign_id, "sent"))
-            st.success(t("dash.done_sent_failed", lang).format(s=sent, f=failed))
+            result = run_async(sender.send_campaign(
+                user_id=uid, campaign_id=campaign_id, variants=db_variants,
+                delay_min=delay_min, delay_max=delay_max, device_id=device_id,
+                on_progress=_on_progress,
+            ))
+            st.success(t("dash.done_sent_failed", lang).format(s=result["sent"], f=result["failed"]))
+
+
+# -- Schedule Page ---------------------------------------------
+
+elif page == "schedule":
+    st.title(t("sched.title", lang))
+    if _need_device():
+        st.stop()
+
+    with st.expander(t("sched.new", lang)):
+        phone = st.text_input(t("sched.phone", lang), placeholder=t("dash.phone_ph", lang))
+        message = st.text_area(t("sched.message", lang), height=120,
+                               help=t("dash.placeholders_help", lang))
+        c1, c2 = st.columns(2)
+        sdate = c1.date_input(t("sched.datetime", lang), value=datetime.now().date(), key="sched_date")
+        stime = c2.time_input("", value=(datetime.now() + timedelta(hours=1)).time(), key="sched_time")
+        if st.button(t("sched.schedule_btn", lang), type="primary", disabled=not phone or not message):
+            sched_dt = datetime.combine(sdate, stime)
+            if sched_dt <= datetime.now():
+                st.error(t("sched.past", lang))
+            else:
+                run_async(database.schedule_message(
+                    uid, sched_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                    phone=phone, content=message))
+                st.success(t("sched.scheduled", lang).format(t=sched_dt.strftime("%d %b %Y %H:%M")))
+                st.rerun()
+
+    st.divider()
+    st.subheader(t("sched.list_title", lang))
+    items = run_async(database.get_scheduled(view_uid))
+    if not items:
+        st.caption(t("sched.empty", lang))
+    else:
+        for s in items:
+            desc = s["content"][:60] or f"{t('sched.campaign', lang)} #{s['campaign_id']}"
+            cols = st.columns([3, 2, 2, 1])
+            cols[0].text(f"{s['phone'] or ''} {desc}")
+            cols[1].text(s["scheduled_at"])
+            cols[2].text(s["status"])
+            if cols[3].button(t("sched.cancel", lang), key=f"cancel_{s['id']}"):
+                run_async(database.cancel_scheduled(s["id"], view_uid))
+                st.success(t("sched.cancelled", lang))
+                st.rerun()
 
 
 # -- Contacts Page ---------------------------------------------
 
 elif page == "contacts":
     st.title(t("dash.contacts_title", lang))
-
-    contacts = run_async(database.get_all_contacts())
-
+    contacts = run_async(database.get_all_contacts(view_uid))
     if not contacts:
         st.info(t("dash.no_contacts_import_csv", lang))
     else:
@@ -326,11 +476,9 @@ elif page == "contacts":
 
 elif page == "stats":
     st.title(t("dash.stats_title", lang))
-
-    stats = run_async(database.get_send_stats())
+    stats = run_async(database.get_send_stats(view_uid))
 
     col1, col2 = st.columns(2)
-
     with col1:
         st.subheader(t("dash.messages_by_status", lang))
         data = {
@@ -345,10 +493,9 @@ elif page == "stats":
             t("dash.col_count", lang): list(data.values()),
         })
         st.bar_chart(df.set_index(t("dash.col_status", lang)))
-
     with col2:
         st.subheader(t("dash.campaigns_label", lang))
-        campaigns = run_async(database.get_all_campaigns())
+        campaigns = run_async(database.get_all_campaigns(view_uid))
         if campaigns:
             for c in campaigns[:5]:
                 camp_stats = run_async(database.get_campaign_stats(c["id"]))
@@ -359,10 +506,9 @@ elif page == "stats":
         else:
             st.caption(t("dash.no_campaigns", lang))
 
-    # Recent messages
     st.divider()
     st.subheader(t("dash.recent_messages", lang))
-    messages = run_async(database.get_recent_messages(20))
+    messages = run_async(database.get_recent_messages(20, view_uid))
     if messages:
         df_msg = pd.DataFrame(messages)
         display_cols = [c for c in ["phone", "status", "content", "sent_at"] if c in df_msg.columns]
@@ -375,46 +521,114 @@ elif page == "stats":
 
 elif page == "templates":
     st.title(t("dash.templates_title", lang))
-
-    templates = run_async(database.get_all_templates())
+    templates = run_async(database.get_all_templates(view_uid))
 
     with st.expander(t("dash.create_template", lang)):
         name = st.text_input(t("dash.template_name", lang))
         category = st.selectbox(t("dash.category", lang), ["general", "broadcast", "info"])
-        body = st.text_area(
-            t("dash.content", lang),
-            height=150,
-            help=t("dash.placeholders_help", lang),
-        )
+        body = st.text_area(t("dash.content", lang), height=150,
+                            help=t("dash.placeholders_help", lang))
         if st.button(t("dash.create_btn", lang)) and name and body:
-            run_async(database.create_template(name, category, body))
+            run_async(database.create_template(name, category, body, user_id=uid))
             st.success(t("dash.template_created", lang).format(name=name))
             st.rerun()
 
     for tpl in templates:
         with st.expander(f"📄 {tpl['name']} [{tpl['category']}]"):
             st.text(tpl["body"])
-            if st.button(f"{t('dash.delete_label', lang)} {tpl['name']}", key=f"del_{tpl['name']}"):
-                run_async(database.delete_template(tpl["name"]))
+            if st.button(f"{t('dash.delete_label', lang)} {tpl['name']}", key=f"del_{tpl['id']}"):
+                run_async(database.delete_template(tpl["name"], user_id=uid))
                 st.success(t("dash.template_deleted", lang).format(name=tpl["name"]))
                 st.rerun()
+
+
+# -- Device Page -----------------------------------------------
+
+elif page == "device":
+    st.title(t("device.title", lang))
+
+    if device_id:
+        info = gowa_device_info(device_id)
+        if info["ok"]:
+            st.success(t("device.linked", lang).format(n=info.get("name") or device_id))
+            c1, c2 = st.columns(2)
+            c1.metric(t("device.state", lang), info.get("state", "?"))
+            c2.metric("📞", info.get("phone") or "-")
+            b1, b2, b3 = st.columns(3)
+            if b1.button(t("device.check_status", lang)):
+                st.rerun()
+            if b2.button(t("device.unlink", lang)):
+                gowa_device_logout(device_id)
+                run_async(database.set_user_device(uid, "", ""))
+                _refresh_user()
+                st.success(t("device.unlinked", lang))
+                st.rerun()
+            if b3.button(t("device.delete", lang)):
+                gowa_device_delete(device_id)
+                run_async(database.set_user_device(uid, "", ""))
+                _refresh_user()
+                st.success(t("device.deleted", lang))
+                st.rerun()
+        else:
+            st.warning(info.get("error", "?"))
+            if st.button(t("device.delete", lang)):
+                run_async(database.set_user_device(uid, "", ""))
+                _refresh_user()
+                st.rerun()
+    else:
+        st.info(t("device.none", lang))
+        with st.expander(t("device.add", lang), expanded=True):
+            dname = st.text_input(t("device.name_label", lang),
+                                  placeholder=t("device.name_ph", lang),
+                                  value=user["username"])
+            if st.button(t("device.add", lang), type="primary") and dname:
+                res = gowa_create_device(f"wasend-{user['username']}-{dname}")
+                if res["ok"]:
+                    st.session_state.pair_device_id = res["id"]
+                    st.session_state.pair_device_name = dname
+                    st.rerun()
+                else:
+                    st.error(t("device.create_failed", lang).format(e=res["error"]))
+
+        pair_id = st.session_state.get("pair_device_id")
+        if pair_id:
+            login = gowa_device_login(pair_id)
+            if login["ok"]:
+                st.markdown(t("device.scan_qr", lang))
+                st.image(login["qr_link"], width=280)
+                st.caption(t("device.waiting", lang))
+                cc1, cc2 = st.columns(2)
+                if cc1.button(t("device.qr_reload", lang)):
+                    st.rerun()
+                if cc2.button(t("device.check_status", lang)):
+                    info = gowa_device_info(pair_id)
+                    if info["ok"] and info.get("state") == "logged_in":
+                        run_async(database.set_user_device(
+                            uid, pair_id, st.session_state.get("pair_device_name", "")))
+                        st.session_state.pop("pair_device_id", None)
+                        _refresh_user()
+                        st.success(t("device.linked", lang).format(
+                            n=info.get("name") or pair_id))
+                        st.rerun()
+                    else:
+                        st.info(f"{t('device.state', lang)}: {info.get('state', '?')}")
+            else:
+                st.error(login["error"])
 
 
 # -- Test Message Page -----------------------------------------
 
 elif page == "test":
     st.title(t("dash.test_title", lang))
+    if _need_device():
+        st.stop()
 
-    phone = st.text_input(
-        t("dash.phone_intl", lang),
-        placeholder=t("dash.phone_ph", lang),
-    )
+    phone = st.text_input(t("dash.phone_intl", lang), placeholder=t("dash.phone_ph", lang))
     message = st.text_area(t("dash.message_label", lang), placeholder=t("dash.test_msg_ph", lang))
 
     if st.button(t("dash.send_btn2", lang), type="primary", disabled=not phone or not message):
-        wa = WhatsAppClient()
         with st.spinner(t("dash.sending", lang)):
-            result = run_async(wa.send_message(phone, message))
+            result = run_async(sender.send_single(uid, phone, message, device_id=device_id))
         if result["status"] == "sent":
             st.success(t("dash.msg_sent_sid", lang).format(sid=result.get("sid", "N/A")))
         else:
@@ -425,23 +639,58 @@ elif page == "test":
 
 elif page == "config":
     st.title(t("dash.config_title", lang))
-
     warnings = config.validate(lang)
     if warnings:
         for w in warnings:
             st.warning(w)
     else:
         st.success(t("dash.config_ok", lang))
-
     st.json({
-        t("dash.cfg_bot", lang): config.BOT_NAME,
+        t("dash.cfg_bot", lang): "Wasend",
         t("dash.cfg_version", lang): config.BOT_VERSION,
         t("dash.cfg_provider", lang): config.WA_PROVIDER,
-        t("dash.cfg_webhook_port", lang): config.WEBHOOK_PORT,
-        t("dash.cfg_rate_limit", lang): (
-            f"{config.GOWA_SEND_INTERVAL_SECONDS:g}s / msg"
-            if config.WA_PROVIDER == "gowa"
-            else f"{config.WA_MESSAGES_PER_SECOND} msg/s"
-        ),
+        t("dash.cfg_delay_range", lang): f"{config.GOWA_DELAY_MIN_SECONDS:g}–{config.GOWA_DELAY_MAX_SECONDS:g}s",
         t("dash.cfg_database", lang): config.DB_PATH,
     })
+
+
+# -- Admin Page ------------------------------------------------
+
+elif page == "admin" and is_admin:
+    st.title(t("admin.title", lang))
+
+    with st.expander(t("admin.create_user", lang)):
+        nu = st.text_input(t("admin.username", lang), key="new_username")
+        npw = st.text_input(t("admin.password", lang), type="password", key="new_password")
+        if st.button(t("admin.create_btn", lang)) and nu and npw:
+            new_id = run_async(database.create_user(nu, npw))
+            if new_id:
+                st.success(t("admin.created", lang).format(u=nu))
+                st.rerun()
+            else:
+                st.error(t("admin.exists", lang))
+
+    users = run_async(database.get_all_users())
+    for u in users:
+        with st.expander(f"{'👑' if u['is_admin'] else '👤'} {u['username']}"):
+            c1, c2, c3 = st.columns(3)
+            c1.markdown(f"**{t('admin.col_device', lang)}:** {u['gowa_device_id'][:8] + '…' if u['gowa_device_id'] else '-'}")
+            c2.markdown(f"**{t('admin.col_created', lang)}:** {(u['created_at'] or '')[:10]}")
+            b1, b2 = st.columns(2)
+            with b1:
+                with st.popover(t("admin.reset_pw", lang)):
+                    pw2 = st.text_input(t("admin.new_password", lang), type="password",
+                                        key=f"pw_{u['id']}")
+                    if st.button(t("admin.create_btn", lang), key=f"pwbtn_{u['id']}") and pw2:
+                        run_async(database.update_user_password(u["id"], pw2))
+                        st.success(t("admin.pw_updated", lang))
+            with b2:
+                if not u["is_admin"] and u["id"] != uid:
+                    if st.button(t("admin.delete", lang), key=f"delu_{u['id']}"):
+                        if u["gowa_device_id"]:
+                            gowa_device_delete(u["gowa_device_id"])
+                        run_async(database.delete_user(u["id"]))
+                        st.success(t("admin.deleted", lang))
+                        st.rerun()
+                elif u["id"] == uid:
+                    st.caption(t("admin.cannot_delete_self", lang))

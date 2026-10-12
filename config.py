@@ -47,6 +47,19 @@ except ValueError:
     GOWA_SEND_INTERVAL_SECONDS = 15.0
 if GOWA_SEND_INTERVAL_SECONDS < 1:
     GOWA_SEND_INTERVAL_SECONDS = 1.0
+# Random anti-ban delay range (seconds): each message waits random.uniform(MIN, MAX)
+try:
+    GOWA_DELAY_MIN_SECONDS = float(os.getenv("GOWA_DELAY_MIN_SECONDS", "15"))
+except ValueError:
+    GOWA_DELAY_MIN_SECONDS = 15.0
+try:
+    GOWA_DELAY_MAX_SECONDS = float(os.getenv("GOWA_DELAY_MAX_SECONDS", "30"))
+except ValueError:
+    GOWA_DELAY_MAX_SECONDS = 30.0
+if GOWA_DELAY_MIN_SECONDS < 1:
+    GOWA_DELAY_MIN_SECONDS = 1.0
+if GOWA_DELAY_MAX_SECONDS < GOWA_DELAY_MIN_SECONDS:
+    GOWA_DELAY_MAX_SECONDS = GOWA_DELAY_MIN_SECONDS
 
 # -- Webhook Server -------------------------------------------
 WEBHOOK_HOST = os.getenv("WEBHOOK_HOST", "0.0.0.0")
@@ -72,6 +85,8 @@ WEBSITE_URL = os.getenv("WEBSITE_URL", "https://soclose.co")
 
 # -- Dashboard ------------------------------------------------
 DASHBOARD_PASSWORD = os.getenv("DASHBOARD_PASSWORD", "")
+ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD") or DASHBOARD_PASSWORD or ""
 
 
 def validate(lang: str | None = None) -> list[str]:

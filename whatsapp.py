@@ -38,8 +38,9 @@ class WhatsAppClient:
     # Class-level rate state shared across all instances
     _shared_last_send = 0.0
 
-    def __init__(self):
+    def __init__(self, device_id: str = ""):
         self.provider = config.WA_PROVIDER
+        self.device_id = device_id or config.GOWA_DEVICE_ID
         # GoWA drives a real WhatsApp device: keep a human-paced interval
         # (anti-ban). Cloud providers keep the per-second rate limit.
         if self.provider == "gowa":
@@ -144,8 +145,8 @@ class WhatsAppClient:
         """Send via a self-hosted GoWA server (Basic Auth)."""
         url = f"{config.GOWA_BASE_URL}/send/message"
         headers = {"Content-Type": "application/json"}
-        if config.GOWA_DEVICE_ID:
-            headers["X-Device-Id"] = config.GOWA_DEVICE_ID
+        if self.device_id:
+            headers["X-Device-Id"] = self.device_id
         payload = {
             "phone": self.normalize_gowa_phone(to),
             "message": body,
@@ -181,6 +182,7 @@ class WhatsAppClient:
         message_template: str,
         campaign_id: int | None = None,
         on_progress: Callable[[int, int, str], None] | None = None,
+        user_id: int = 1,
     ) -> dict:
         """
         Send messages to multiple recipients.
@@ -217,6 +219,7 @@ class WhatsAppClient:
                 contact_id=contact_id,
                 wa_message_id=result.get("sid", ""),
                 error_message=result.get("error", ""),
+                user_id=user_id,
             )
 
             if result["status"] == "sent":
@@ -229,3 +232,81 @@ class WhatsAppClient:
                 on_progress(i + 1, len(recipients), result["status"])
 
         return results
+
+
+# -- GoWA Device Management ------------------------------------
+
+def _gowa_auth() -> tuple[str, str]:
+    return (config.GOWA_USERNAME, config.GOWA_PASSWORD)
+
+
+def _gowa_call(method: str, path: str, body: dict | None = None) -> dict:
+    """Synchronous GoWA API call. Returns parsed JSON or {'code': 'HTTP_ERROR', ...}."""
+    url = f"{config.GOWA_BASE_URL}{path}"
+    try:
+        resp = requests.request(method, url, json=body, auth=_gowa_auth(), timeout=30)
+        try:
+            return resp.json()
+        except ValueError:
+            return {"code": "HTTP_ERROR", "message": resp.text[:200] or f"HTTP {resp.status_code}"}
+    except Exception as e:
+        logger.error(f"GoWA API {method} {path} failed: {e}")
+        return {"code": "CONNECTION_ERROR", "message": str(e)}
+
+
+def gowa_create_device(name: str) -> dict:
+    """Create a device slot. Returns {'id': ...} on success."""
+    data = _gowa_call("POST", "/devices", {"name": name})
+    results = data.get("results") or {}
+    if data.get("code") == "SUCCESS" and results.get("id"):
+        return {"ok": True, "id": results["id"]}
+    return {"ok": False, "error": data.get("message", "unknown error")}
+
+
+def gowa_device_login(device_id: str) -> dict:
+    """Start login for a device slot. Returns {'qr_link', 'qr_duration'} (https)."""
+    data = _gowa_call("GET", f"/devices/{device_id}/login")
+    results = data.get("results") or {}
+    qr = results.get("qr_link") or ""
+    if qr.startswith("http://"):
+        qr = "https://" + qr[len("http://"):]
+    if data.get("code") == "SUCCESS" and qr:
+        return {"ok": True, "qr_link": qr,
+                "qr_duration": results.get("qr_duration", 30),
+                "device_id": results.get("device_id", device_id)}
+    return {"ok": False, "error": data.get("message", "unknown error")}
+
+
+def gowa_device_info(device_id: str) -> dict:
+    """Get device info including state (disconnected/connecting/connected/logged_in)."""
+    data = _gowa_call("GET", f"/devices/{device_id}")
+    results = data.get("results") or {}
+    if data.get("code") == "SUCCESS":
+        return {"ok": True,
+                "state": results.get("state", "unknown"),
+                "name": results.get("name") or results.get("display_name", ""),
+                "phone": results.get("phone_number") or "",
+                "jid": results.get("jid") or ""}
+    return {"ok": False, "error": data.get("message", "unknown error")}
+
+
+def gowa_device_logout(device_id: str) -> dict:
+    data = _gowa_call("GET", f"/devices/{device_id}/logout")
+    if data.get("code") == "SUCCESS":
+        return {"ok": True}
+    return {"ok": False, "error": data.get("message", "unknown error")}
+
+
+def gowa_device_delete(device_id: str) -> dict:
+    data = _gowa_call("DELETE", f"/devices/{device_id}")
+    # Server may close connection without body on success; treat empty as ok
+    if data.get("code") in ("SUCCESS", "CONNECTION_ERROR") and not data.get("message"):
+        return {"ok": True}
+    if data.get("code") == "SUCCESS":
+        return {"ok": True}
+    return {"ok": False, "error": data.get("message", "unknown error")}
+
+
+def gowa_list_devices() -> list[dict]:
+    data = _gowa_call("GET", "/devices")
+    return data.get("results") or []
