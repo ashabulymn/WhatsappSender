@@ -44,7 +44,8 @@ async def _resolve_cli_user():
     admin = await database.get_admin_user()
     if admin:
         CLI_UID = admin["id"]
-        CLI_DEVICE = admin.get("gowa_device_id") or ""
+        _dev = await database.get_default_device(admin["id"])
+        CLI_DEVICE = _dev["gowa_device_id"] if _dev else ""
         wa_client = WhatsAppClient(device_id=CLI_DEVICE)
 
 

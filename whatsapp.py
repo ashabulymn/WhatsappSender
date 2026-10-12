@@ -265,16 +265,22 @@ def gowa_device_id_for(username: str) -> str:
     return f"wasend-{safe}"
 
 
-def gowa_create_device(username: str) -> dict:
+def gowa_create_device(username: str, max_tries: int = 5) -> dict:
     """Create a device slot named after the wasend username.
 
+    Tries wasend-<user>, wasend-<user>-2, ... on id collision.
     Returns {'ok', 'id'} on success.
     """
-    data = _gowa_call("POST", "/devices", {"device_id": gowa_device_id_for(username)})
-    results = data.get("results") or {}
-    if data.get("code") == "SUCCESS" and results.get("id"):
-        return {"ok": True, "id": results["id"]}
-    # Fallback: let GoWA generate an id (e.g. id already taken)
+    base = gowa_device_id_for(username)
+    for i in range(1, max_tries + 1):
+        did = base if i == 1 else f"{base}-{i}"
+        data = _gowa_call("POST", "/devices", {"device_id": did})
+        results = data.get("results") or {}
+        if data.get("code") == "SUCCESS" and results.get("id"):
+            return {"ok": True, "id": results["id"]}
+        if "already exists" not in (data.get("message") or ""):
+            break
+    # Fallback: let GoWA generate an id
     data = _gowa_call("POST", "/devices", {})
     results = data.get("results") or {}
     if data.get("code") == "SUCCESS" and results.get("id"):

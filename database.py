@@ -210,20 +210,22 @@ async def init():
         # Bootstrap: link admin to an existing GoWA device via env (one-time)
         admin_device_id = (os.getenv("ADMIN_DEVICE_ID") or "").strip()
         if admin_device_id:
-            cursor = await db.execute("SELECT gowa_device_id FROM users WHERE id = ?", (admin_id,))
-            row = await cursor.fetchone()
-            if row and not row[0]:
+            existing = await get_user_devices(admin_id, _db=db)
+            if not any(d["gowa_device_id"] == admin_device_id for d in existing):
                 dname = ""
                 try:
                     from whatsapp import gowa_device_info as _gdi
                     info = _gdi(admin_device_id)
                     if info.get("ok"):
-                        dname = info.get("name", "")
+                        dname = info.get("display_name") or info.get("name", "")
                 except Exception as e:
                     logger.warning("ADMIN_DEVICE_ID lookup failed: %s", e)
                 await db.execute(
-                    "UPDATE users SET gowa_device_id = ?, device_name = ? WHERE id = ?",
-                    (admin_device_id, dname, admin_id))
+                    "INSERT OR IGNORE INTO user_devices (user_id, gowa_device_id, device_name, is_default)"
+                    " VALUES (?, ?, ?, ?)",
+                    (admin_id, admin_device_id, dname, 0 if existing else 1),
+                )
+                await db.commit()
                 logger.info("Linked admin to GoWA device %s", admin_device_id)
         for name, category, body in _DEFAULT_TEMPLATES:
             await db.execute(
@@ -336,8 +338,118 @@ async def get_user_by_username(username: str) -> dict | None:
 
 async def get_claimed_device_ids() -> set[str]:
     """All gowa_device_id currently claimed by wasend users."""
-    users = await get_all_users()
-    return {u["gowa_device_id"] for u in users if u.get("gowa_device_id")}
+    rows = await get_all_device_rows()
+    return {r["gowa_device_id"] for r in rows}
+
+
+# -- Multi-device (up to DEVICE_MAX_PER_USER per user) ---------
+
+MAX_DEVICES_PER_USER = int(os.getenv("DEVICE_MAX_PER_USER", "3") or 3)
+
+
+async def get_user_devices(user_id: int, _db=None) -> list[dict]:
+    own = _db is None
+    db = _db or await _connect()
+    try:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM user_devices WHERE user_id = ? ORDER BY is_default DESC, id",
+            (user_id,),
+        )
+        return [dict(row) for row in await cursor.fetchall()]
+    finally:
+        if own:
+            await db.close()
+
+
+async def get_default_device(user_id: int) -> dict | None:
+    devs = await get_user_devices(user_id)
+    return devs[0] if devs else None
+
+
+async def add_user_device(user_id: int, gowa_device_id: str, device_name: str = "") -> dict:
+    """Claim a GoWA slot for a user. Raises ValueError('max_devices') at the limit."""
+    db = await _connect()
+    try:
+        await _ensure_extra_tables(db)
+        cursor = await db.execute(
+            "SELECT COUNT(*) FROM user_devices WHERE user_id = ?", (user_id,))
+        count = (await cursor.fetchone())[0]
+        if count >= MAX_DEVICES_PER_USER:
+            raise ValueError("max_devices")
+        cursor = await db.execute(
+            """INSERT OR IGNORE INTO user_devices (user_id, gowa_device_id, device_name, is_default)
+               VALUES (?, ?, ?, ?)""",
+            (user_id, gowa_device_id, device_name or "", 1 if count == 0 else 0),
+        )
+        await db.commit()
+        devs = await get_user_devices(user_id, _db=db)
+        return next(d for d in devs if d["gowa_device_id"] == gowa_device_id)
+    finally:
+        await db.close()
+
+
+async def remove_user_device(user_id: int, gowa_device_id: str) -> None:
+    db = await _connect()
+    try:
+        await db.execute(
+            "DELETE FROM user_devices WHERE user_id = ? AND gowa_device_id = ?",
+            (user_id, gowa_device_id),
+        )
+        # Promote another device to default if needed
+        cursor = await db.execute(
+            "SELECT COUNT(*) FROM user_devices WHERE user_id = ? AND is_default = 1",
+            (user_id,),
+        )
+        if (await cursor.fetchone())[0] == 0:
+            await db.execute(
+                """UPDATE user_devices SET is_default = 1 WHERE id = (
+                       SELECT id FROM user_devices WHERE user_id = ? ORDER BY id LIMIT 1)""",
+                (user_id,),
+            )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def set_default_device(user_id: int, gowa_device_id: str) -> None:
+    db = await _connect()
+    try:
+        await db.execute("UPDATE user_devices SET is_default = 0 WHERE user_id = ?", (user_id,))
+        await db.execute(
+            "UPDATE user_devices SET is_default = 1 WHERE user_id = ? AND gowa_device_id = ?",
+            (user_id, gowa_device_id),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def touch_device_login(gowa_device_id: str) -> None:
+    """Mark a device as seen logged-in (used by the auto-cleanup janitor)."""
+    db = await _connect()
+    try:
+        await db.execute(
+            "UPDATE user_devices SET last_logged_in_at = datetime('now') WHERE gowa_device_id = ?",
+            (gowa_device_id,),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def get_all_device_rows() -> list[dict]:
+    """Every claimed device with owner info (for janitor + admin views)."""
+    db = await _connect()
+    try:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """SELECT d.*, u.username FROM user_devices d
+               JOIN users u ON u.id = d.user_id ORDER BY d.user_id, d.id"""
+        )
+        return [dict(row) for row in await cursor.fetchall()]
+    finally:
+        await db.close()
 
 
 async def get_admin_user() -> dict | None:
@@ -365,7 +477,9 @@ async def get_all_users() -> list[dict]:
     try:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
-            "SELECT id, username, is_admin, gowa_device_id, device_name, created_at FROM users ORDER BY id"
+            """SELECT u.id, u.username, u.is_admin, u.gowa_device_id, u.device_name, u.created_at,
+                      (SELECT COUNT(*) FROM user_devices d WHERE d.user_id = u.id) AS device_count
+               FROM users u ORDER BY u.id"""
         )
         return [dict(row) for row in await cursor.fetchall()]
     finally:
@@ -382,6 +496,9 @@ async def delete_user(user_id: int) -> bool:
             return False
         await db.execute("DELETE FROM campaign_contacts WHERE campaign_id IN (SELECT id FROM campaigns WHERE user_id = ?)", (user_id,))
         await db.execute("DELETE FROM message_log WHERE user_id = ?", (user_id,))
+        await db.execute("DELETE FROM user_devices WHERE user_id = ?", (user_id,))
+        await db.execute("DELETE FROM message_variants WHERE user_id = ?", (user_id,))
+        await db.execute("DELETE FROM scheduled_messages WHERE user_id = ?", (user_id,))
         await db.execute("DELETE FROM campaigns WHERE user_id = ?", (user_id,))
         await db.execute("DELETE FROM contacts WHERE user_id = ?", (user_id,))
         await db.execute("DELETE FROM templates WHERE user_id = ?", (user_id,))
@@ -402,16 +519,6 @@ async def update_user_password(user_id: int, password: str) -> None:
         await db.close()
 
 
-async def set_user_device(user_id: int, device_id: str, device_name: str = "") -> None:
-    db = await _connect()
-    try:
-        await db.execute(
-            "UPDATE users SET gowa_device_id = ?, device_name = ? WHERE id = ?",
-            (device_id or "", device_name or "", user_id),
-        )
-        await db.commit()
-    finally:
-        await db.close()
 
 
 # -- Contacts -------------------------------------------------
@@ -814,10 +921,29 @@ CREATE TABLE IF NOT EXISTS scheduled_messages (
 CREATE INDEX IF NOT EXISTS idx_scheduled_due ON scheduled_messages(status, scheduled_at);
 """
 
+_DEVICES_SCHEMA = """
+CREATE TABLE IF NOT EXISTS user_devices (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id         INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    gowa_device_id  TEXT NOT NULL UNIQUE,
+    device_name     TEXT DEFAULT '',
+    is_default      INTEGER DEFAULT 0,
+    last_logged_in_at TEXT,
+    created_at      TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_user_devices_user ON user_devices(user_id);
+"""
+
 
 async def _ensure_extra_tables(db: aiosqlite.Connection):
     await db.executescript(_VARIANT_SCHEMA)
     await db.executescript(_SCHEDULED_SCHEMA)
+    await db.executescript(_DEVICES_SCHEMA)
+    # Migrate legacy single-device columns into user_devices (idempotent)
+    await db.execute(
+        """INSERT OR IGNORE INTO user_devices (user_id, gowa_device_id, device_name, is_default)
+           SELECT id, gowa_device_id, device_name, 1 FROM users WHERE gowa_device_id <> ''"""
+    )
     # variant_id on message_log for audit (which variant was sent)
     cols = await _table_columns(db, "message_log")
     if "variant_id" not in cols:
