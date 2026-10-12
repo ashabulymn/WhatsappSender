@@ -118,3 +118,5 @@ def validate(lang: str | None = None) -> list[str]:
         warnings.append(t("cfgw.rate", lang).format(v=WA_MESSAGES_PER_SECOND))
 
     return warnings
+
+# v2.0: multi-user + anti-ban + scheduled messages
