@@ -79,7 +79,7 @@ except ValueError:
 
 # -- Bot Identity ---------------------------------------------
 BOT_NAME = "WhatsApp Bulk Sender"
-BOT_VERSION = "1.0.0"
+BOT_VERSION = "2.0.0"
 COMMUNITY_URL = "https://github.com/SoCloseSociety"
 WEBSITE_URL = os.getenv("WEBSITE_URL", "https://soclose.co")
 
