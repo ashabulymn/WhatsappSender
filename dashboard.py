@@ -896,3 +896,7 @@ elif page == "admin" and is_admin:
                 except ValueError:
                     st.error(t("device.max_reached", lang).format(
                         n=database.MAX_DEVICES_PER_USER))
+            if st.button(t("admin.delete_device", lang), key=f"deld_{_ud.get('id')}"):
+                gowa_device_delete(_ud.get("id"))
+                st.success(t("admin.device_deleted", lang))
+                st.rerun()
