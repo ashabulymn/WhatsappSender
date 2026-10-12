@@ -248,26 +248,41 @@ def verify_password(password: str, stored: str) -> bool:
 
 
 async def ensure_admin(db: aiosqlite.Connection | None = None) -> int:
-    """Create the admin user from env on first run. Returns admin user id."""
+    """Create the admin user from env on first run. Returns admin user id.
+
+    Desired-state: if ADMIN_USERNAME is set and the database has exactly one
+    user (the bootstrap admin) with a different username, rename it — so the
+    login always matches what the owner configured, regardless of deploy order.
+    """
     own = db is None
     if own:
         db = await _connect()
     try:
-        cursor = await db.execute("SELECT id FROM users WHERE is_admin = 1 LIMIT 1")
+        cursor = await db.execute("SELECT id, username FROM users WHERE is_admin = 1 LIMIT 1")
         row = await cursor.fetchone()
+        want_username = (os.getenv("ADMIN_USERNAME") or "admin").strip() or "admin"
         if row:
-            return row[0]
-        username = (os.getenv("ADMIN_USERNAME") or "admin").strip() or "admin"
+            admin_id, current_username = row[0], row[1]
+            if want_username != current_username:
+                cursor = await db.execute("SELECT COUNT(*) FROM users")
+                total = (await cursor.fetchone())[0]
+                if total == 1:
+                    await db.execute("UPDATE users SET username = ? WHERE id = ?",
+                                     (want_username, admin_id))
+                    await db.commit()
+                    logger.info("Renamed bootstrap admin '%s' -> '%s'",
+                                current_username, want_username)
+            return admin_id
         password = os.getenv("ADMIN_PASSWORD") or config.DASHBOARD_PASSWORD or ""
         if not password:
             password = secrets.token_urlsafe(16)
             logger.warning("ADMIN_PASSWORD/DASHBOARD_PASSWORD not set — generated random admin password: %s", password)
         cursor = await db.execute(
             "INSERT INTO users (username, password_hash, is_admin) VALUES (?, ?, 1)",
-            (username, hash_password(password)),
+            (want_username, hash_password(password)),
         )
         await db.commit()
-        logger.info("Created admin user '%s' (id %s)", username, cursor.lastrowid)
+        logger.info("Created admin user '%s' (id %s)", want_username, cursor.lastrowid)
         return cursor.lastrowid or 1
     finally:
         if own:
