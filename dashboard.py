@@ -250,8 +250,11 @@ section[data-testid="stSidebar"]{background-color:var(--wa-card);border-right:1p
   border:1px solid var(--wa-line);border-radius:12px;padding:12px;margin:4px 0 4px;}
 section[data-testid="stSidebar"] .stButton>button{
   border:1px solid transparent;background:transparent;color:var(--wa-muted);
-  font-weight:600;justify-content:flex-start;text-align:left;
-  padding:9px 14px;border-radius:10px;}
+  font-weight:600;justify-content:flex-start !important;text-align:left !important;
+  padding:9px 0 !important;border-radius:10px;}
+section[data-testid="stSidebar"] .stButton>button div[data-testid="stMarkdownContainer"],
+section[data-testid="stSidebar"] .stButton>button div[data-testid="stMarkdownContainer"] p{
+  text-align:left !important;width:100%;margin:0 !important;}
 section[data-testid="stSidebar"] .stButton>button:hover{
   background:var(--wa-accent-soft);border-color:transparent;color:var(--wa-ink);}
 section[data-testid="stSidebar"] .stButton>button[kind="primary"]{
