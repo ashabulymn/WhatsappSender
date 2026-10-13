@@ -284,6 +284,28 @@ div[data-baseweb="select"]>div{background-color:var(--wa-card);border-color:var(
 /* progress */
 .stProgress>div>div>div{background-color:var(--wa-accent);}
 
+/* DarkPan-style top menu (pills) */
+[data-testid="stPills"]{gap:8px;overflow-x:auto;padding:2px;}
+[data-testid="stPills"] button{
+  background-color:var(--wa-card) !important;
+  border:1px solid var(--wa-line) !important;
+  color:var(--wa-muted) !important;
+  border-radius:10px !important;
+  font-weight:600 !important;
+  padding:8px 16px !important;
+  white-space:nowrap;
+}
+[data-testid="stPills"] button:hover{
+  border-color:var(--wa-accent) !important;
+  color:var(--wa-ink) !important;
+}
+[data-testid="stPills"] button[aria-pressed="true"]{
+  background-color:var(--wa-accent-soft) !important;
+  border-color:var(--wa-accent) !important;
+  color:var(--wa-accent) !important;
+  font-weight:700 !important;
+}
+
 /* DarkPan-style stat cards */
 .stat-card{display:flex;align-items:center;gap:14px;background:var(--wa-card);
   border:1px solid var(--wa-line);border-radius:12px;padding:18px 16px;
