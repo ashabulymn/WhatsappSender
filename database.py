@@ -1347,6 +1347,18 @@ async def get_failed_phones(user_id: int | None, campaign_id: int) -> list[dict]
         await db.close()
 
 
+async def get_sent_phones(campaign_id: int) -> set[str]:
+    """Distinct phones already sent successfully for a campaign (skip-sent)."""
+    db = await _connect()
+    try:
+        cur = await db.execute(
+            "SELECT DISTINCT phone FROM message_log WHERE campaign_id = ? AND status = 'sent'",
+            (campaign_id,))
+        return {r[0] for r in await cur.fetchall()}
+    finally:
+        await db.close()
+
+
 async def add_blocked(user_id: int, phone: str, reason: str = "") -> bool:
     """Add a phone to the user's blocklist. Returns False if already blocked."""
     db = await _connect()

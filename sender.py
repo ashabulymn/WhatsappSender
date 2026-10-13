@@ -135,6 +135,7 @@ async def send_campaign(
     max_messages: int | None = None,
     only_phones: list[str] | None = None,
     rotate_devices: bool = False,
+    skip_sent: bool = False,
 ) -> dict:
     """
     Send a campaign with anti-ban safeguards.
@@ -146,6 +147,9 @@ async def send_campaign(
     - Optional limits: max_duration_min (0 = unlimited), max_messages (0 = unlimited).
       None values fall back to the campaign row.
     - rotate_devices: round-robin sends across all user devices (needs 2+).
+    - skip_sent: skip phones already logged as 'sent' for this campaign
+      (manual re-blast protection). Scheduled/recurring sends keep this False
+      so each occurrence is a fresh broadcast.
     """
     delay_min = config.GOWA_DELAY_MIN_SECONDS if delay_min is None else max(0.5, delay_min)
     delay_max = config.GOWA_DELAY_MAX_SECONDS if delay_max is None else max(delay_min, delay_max)
@@ -169,6 +173,11 @@ async def send_campaign(
         _blocked = set()
     if _blocked:
         contacts = [c for c in contacts if c.get("phone") not in _blocked]
+    # skip already-sent — prevents duplicates on manual re-blast
+    if skip_sent:
+        _sent_phones = await database.get_sent_phones(campaign_id)
+        if _sent_phones:
+            contacts = [c for c in contacts if c.get("phone") not in _sent_phones]
     total = len(contacts)
     results = {"sent": 0, "failed": 0, "total": total, "results": [],
                "stopped_early": False, "stop_reason": ""}

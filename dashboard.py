@@ -589,7 +589,7 @@ def _need_device() -> bool:
 
 def _run_blast_thread(uid, campaign_id, variants, delay_min, delay_max,
                       device_id, max_dur, max_msg, only_phones=None,
-                      rotate_devices=False):
+                      rotate_devices=False, skip_sent=False):
     """Background blast runner (daemon thread). Progress via blast control."""
     try:
         run_async(sender.send_campaign(
@@ -597,6 +597,7 @@ def _run_blast_thread(uid, campaign_id, variants, delay_min, delay_max,
             delay_min=delay_min, delay_max=delay_max, device_id=device_id,
             max_duration_min=max_dur, max_messages=max_msg,
             only_phones=only_phones, rotate_devices=rotate_devices,
+            skip_sent=skip_sent,
         ))
     except Exception as e:
         logger.error("Blast thread failed: %s", e)
@@ -905,6 +906,12 @@ elif page == "send":
     _ctrl = sender.get_blast_control(campaign_id)
     _blast_active = _ctrl["status"] in ("running", "paused")
 
+    # skip already-sent (default ON for manual sends)
+    skip_sent = st.checkbox(
+        t("send.skip_sent", lang), value=True,
+        help=t("send.skip_sent_help", lang),
+        disabled=_blast_active)
+
     btn_label = t("sched.schedule_btn", lang) if schedule_it else t("dash.send_btn", lang)
     if st.button(btn_label, type="primary",
                  disabled=(not variants_input or not contacts or _blast_active)):
@@ -943,6 +950,7 @@ elif page == "send":
                 args=(uid, campaign_id, db_variants, delay_min, delay_max,
                       send_device_id, limit_minutes, int(limit_messages),
                       None, rotate_devices),
+                kwargs={"skip_sent": skip_sent},
                 daemon=True,
             )
             th.start()
