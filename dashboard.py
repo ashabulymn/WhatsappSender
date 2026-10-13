@@ -16,6 +16,7 @@ import time
 from datetime import datetime, timedelta
 
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 
 import config
@@ -23,7 +24,7 @@ import database
 import whatsapp
 import csv_handler
 import sender
-from i18n import t, available_languages
+from i18n import t
 from whatsapp import (
     WhatsAppClient,
     gowa_create_device,
@@ -213,13 +214,96 @@ st.set_page_config(
 
 # Hide Streamlit's default menu (Rerun / Settings / Print) and footer
 st.markdown(
-    "<style>#MainMenu {visibility: hidden;} footer {visibility: hidden;}</style>",
+    """<style>
+#MainMenu {visibility: hidden;}
+footer {visibility: hidden;}
+/* ===== Wasend dark mode (html.wasend-dark set by the theme toggle) ===== */
+html.wasend-dark{--background-color:#0e1117;--secondary-background-color:#1c2028;--text-color:#e8eaed;color-scheme:dark;}
+html.wasend-dark body{background-color:#0e1117;}
+html.wasend-dark .stApp{background-color:#0e1117;}
+html.wasend-dark section[data-testid="stSidebar"]{background-color:#131722;}
+html.wasend-dark [data-testid="stHeader"]{background:rgba(14,17,23,.85);}
+html.wasend-dark [data-testid="stAppViewContainer"]{background-color:#0e1117;}
+html.wasend-dark .stMarkdown p,html.wasend-dark .stMarkdown li,
+html.wasend-dark h1,html.wasend-dark h2,html.wasend-dark h3,
+html.wasend-dark .stCaption,html.wasend-dark label{color:#e8eaed;}
+html.wasend-dark .stTextInput>div>div>input,
+html.wasend-dark .stTextArea>div>div>textarea,
+html.wasend-dark .stNumberInput>div>div>input,
+html.wasend-dark .stDateInput>div>div>input,
+html.wasend-dark .stTimeInput>div>div>input{background-color:#1c2028;color:#e8eaed;border-color:#3a4150;}
+html.wasend-dark div[data-baseweb="select"]{background-color:#1c2028;}
+html.wasend-dark div[data-baseweb="select"] span{color:#e8eaed;}
+html.wasend-dark .stButton>button{background-color:#1c2028;color:#e8eaed;border:1px solid #3a4150;}
+html.wasend-dark .stButton>button[kind="primary"]{background-color:#ff4b4b;border-color:#ff4b4b;color:#fff;}
+html.wasend-dark [data-testid="stExpander"]{background-color:#131722;border:1px solid #3a4150;}
+html.wasend-dark .stAlert{background-color:#1c2028;color:#e8eaed;border:1px solid #3a4150;}
+html.wasend-dark [data-testid="stMetric"]{background-color:#131722;}
+html.wasend-dark hr{border-color:#3a4150;}
+html.wasend-dark table{color:#e8eaed;}
+html.wasend-dark a{color:#8ab4ff;}
+html.wasend-dark .stRadio label,html.wasend-dark .stCheckbox label{color:#e8eaed;}
+</style>""",
     unsafe_allow_html=True,
 )
 
+# Theme toggle switch (pure client-side; default follows OS, saved in localStorage)
+_THEME_SWITCH_HTML = """
+<div style="display:flex;align-items:center;justify-content:center;gap:5px;height:38px;">
+  <span style="font-size:17px;line-height:1;">&#9728;&#65039;</span>
+  <label class="wsw"><input type="checkbox" id="wtsw"><span class="wsl"></span></label>
+  <span style="font-size:17px;line-height:1;">&#127769;</span>
+</div>
+<style>
+.wsw{position:relative;display:inline-block;width:42px;height:23px;margin:0;}
+.wsw input{opacity:0;width:0;height:0;margin:0;}
+.wsl{position:absolute;cursor:pointer;top:0;left:0;right:0;bottom:0;background:#c9cdd4;border-radius:23px;transition:.2s;}
+.wsl:before{position:absolute;content:"";height:17px;width:17px;left:3px;bottom:3px;background:#fff;border-radius:50%;transition:.2s;box-shadow:0 1px 3px rgba(0,0,0,.3);}
+.wsw input:checked + .wsl{background:#555;}
+.wsw input:checked + .wsl:before{transform:translateX(19px);}
+</style>
+<script>
+(function(){
+  var KEY='wasend-theme';
+  var doc=window.parent.document;
+  var box=document.getElementById('wtsw');
+  function apply(mode){
+    if(mode==='dark'){doc.documentElement.classList.add('wasend-dark');}
+    else{doc.documentElement.classList.remove('wasend-dark');}
+    box.checked=(mode==='dark');
+  }
+  var init=null;
+  try{init=localStorage.getItem(KEY);}catch(e){}
+  if(!init){init=window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';}
+  apply(init);
+  box.addEventListener('change',function(){
+    var m=box.checked?'dark':'light';
+    try{localStorage.setItem(KEY,m);}catch(e){}
+    apply(m);
+  });
+  try{window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change',function(e){
+    var s=null;try{s=localStorage.getItem(KEY);}catch(x){}
+    if(!s)apply(e.matches?'dark':'light');
+  });}catch(e){}
+})();
+</script>
+"""
+
 # -- Language --------------------------------------------------
+def _system_lang() -> str:
+    """Default UI language from the browser locale (fallback: config)."""
+    try:
+        loc = (st.context.locale or "").lower()
+    except Exception:
+        return config.APP_LANG
+    if loc.startswith("id"):
+        return "id"
+    if loc.startswith("en"):
+        return "en"
+    return config.APP_LANG
+
 if "lang" not in st.session_state:
-    st.session_state.lang = config.APP_LANG
+    st.session_state.lang = _system_lang()
 lang = st.session_state.lang
 
 # -- Authentication Gate ---------------------------------------
@@ -263,15 +347,31 @@ if _impersonating:
         st.session_state.real_admin = None
         st.rerun()
 
-# -- Top bar logout (always visible, mobile-friendly) -----------
-_t1, _t2 = st.columns([4, 1])
-with _t2:
-    if st.button("🚪 " + t("auth.logout", lang), key="logout_top",
-                 use_container_width=True):
+# -- Top bar: language toggle, theme toggle, logout (icon-only) --
+_tb1, _tb2, _tb3, _tb4, _tb5 = st.columns([0.55, 0.85, 0.55, 1.5, 2.55])
+with _tb1:
+    st.markdown("<div style='font-size:20px;text-align:center;height:38px;"
+                "display:flex;align-items:center;justify-content:center;'>🇮🇩</div>",
+                unsafe_allow_html=True)
+with _tb2:
+    _is_en = st.toggle("", value=(lang == "en"), key="lang_toggle",
+                       label_visibility="collapsed")
+with _tb3:
+    st.markdown("<div style='font-size:20px;text-align:center;height:38px;"
+                "display:flex;align-items:center;justify-content:center;'>🇬🇧</div>",
+                unsafe_allow_html=True)
+with _tb4:
+    components.html(_THEME_SWITCH_HTML, height=38)
+with _tb5:
+    if st.button("🚪", key="logout_top"):
         st.session_state.user = None
         st.session_state.impersonating = False
         st.session_state.real_admin = None
         st.rerun()
+_new_lang = "en" if _is_en else "id"
+if _new_lang != lang:
+    st.session_state.lang = _new_lang
+    st.rerun()
 
 # -- Sidebar ---------------------------------------------------
 
@@ -288,18 +388,6 @@ with st.sidebar:
         st.session_state.impersonating = False
         st.session_state.real_admin = None
         st.rerun()
-
-    # Language toggle
-    lang_codes = [code for code, _ in available_languages()]
-    lang_labels = [label for _, label in available_languages()]
-    current_idx = lang_codes.index(lang) if lang in lang_codes else 0
-    picked = st.selectbox(t("dash.lang_label", lang), lang_labels,
-                          index=current_idx, key="lang_picker")
-    new_lang = lang_codes[lang_labels.index(picked)]
-    if new_lang != lang:
-        st.session_state.lang = new_lang
-        st.rerun()
-    lang = st.session_state.lang
 
     pages = [
         ("dashboard", t("dash.page_dashboard", lang)),
