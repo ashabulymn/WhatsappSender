@@ -75,6 +75,41 @@ def init_db():
         st.session_state.db_init = True
 
 
+# -- Media uploads (served to GoWA via Streamlit static files) --
+
+def _ensure_upload_serving():
+    """Persistent upload dir (/app/data/uploads) exposed at /app/static/uploads/."""
+    try:
+        os.makedirs(config.UPLOAD_DIR, exist_ok=True)
+        link = os.path.join(os.getcwd(), "static", "uploads")
+        os.makedirs(os.path.dirname(link), exist_ok=True)
+        if os.path.islink(link):
+            if os.readlink(link) != config.UPLOAD_DIR:
+                os.unlink(link)
+                os.symlink(config.UPLOAD_DIR, link)
+        elif not os.path.exists(link):
+            os.symlink(config.UPLOAD_DIR, link)
+    except Exception as e:
+        logger.warning("upload serving setup failed: %s", e)
+
+
+_ensure_upload_serving()
+
+
+def _save_upload(up_file, campaign_id: int, max_mb: int = 10) -> tuple[str, str] | tuple[None, None]:
+    """Save an uploaded file persistently. Returns (public_url, filename)."""
+    import re
+    import secrets as _secrets
+    if up_file.size and up_file.size > max_mb * 1024 * 1024:
+        st.error(t("send.media_too_big", st.session_state.get("lang", "id")).format(m=max_mb))
+        return None, None
+    safe = re.sub(r"[^a-zA-Z0-9._-]", "_", up_file.name or "file")[-60:] or "file"
+    fname = f"c{campaign_id}_{_secrets.token_hex(4)}_{safe}"
+    with open(os.path.join(config.UPLOAD_DIR, fname), "wb") as f:
+        f.write(up_file.getbuffer())
+    return f"{config.MEDIA_BASE_URL}/app/static/uploads/{fname}", safe
+
+
 # -- Background Scheduler --------------------------------------
 
 def _process_scheduled(s: dict):
@@ -778,6 +813,60 @@ elif page == "send":
                 f"{_msg}</div>",
                 unsafe_allow_html=True)
 
+    # --- Media attachment (image / file) ---
+    st.subheader(t("send.media_title", lang))
+    _camp0 = run_async(database.get_campaign(campaign_id)) or {}
+    _mtype_opts = [t("send.media_none", lang), t("send.media_image", lang),
+                   t("send.media_file", lang)]
+    _cur_mtype = (1 if _camp0.get("image_url")
+                  else 2 if _camp0.get("document_url") else 0)
+    _mtype = st.radio(t("send.media_type", lang), _mtype_opts,
+                      index=_cur_mtype, horizontal=True)
+    _media_img, _media_doc, _media_doc_name = "", "", ""
+    if _mtype == _mtype_opts[1]:
+        _up = st.file_uploader(t("send.media_image_up", lang),
+                               type=["png", "jpg", "jpeg", "webp"],
+                               key=f"media_img_{campaign_id}")
+        _skey = f"_media_saved_img_{campaign_id}"
+        if _up is not None and st.session_state.get(_skey) != (_up.name, _up.size):
+            _url, _ = _save_upload(_up, campaign_id)
+            if _url:
+                st.session_state[_skey] = (_up.name, _up.size)
+                st.session_state[f"_media_img_url_{campaign_id}"] = _url
+        _media_img = st.session_state.get(f"_media_img_url_{campaign_id}") \
+            or _camp0.get("image_url") or ""
+        if _media_img:
+            st.image(_media_img, width=240)
+            if st.button(t("send.media_remove", lang), key=f"media_rm_img_{campaign_id}"):
+                st.session_state.pop(f"_media_img_url_{campaign_id}", None)
+                st.session_state.pop(_skey, None)
+                run_async(database.set_campaign_media(campaign_id))
+                st.rerun()
+    elif _mtype == _mtype_opts[2]:
+        _up = st.file_uploader(t("send.media_file_up", lang),
+                               type=["pdf", "doc", "docx", "xls", "xlsx", "zip", "txt",
+                                     "png", "jpg", "jpeg"],
+                               key=f"media_doc_{campaign_id}")
+        _skey = f"_media_saved_doc_{campaign_id}"
+        if _up is not None and st.session_state.get(_skey) != (_up.name, _up.size):
+            _url, _nm = _save_upload(_up, campaign_id)
+            if _url:
+                st.session_state[_skey] = (_up.name, _up.size)
+                st.session_state[f"_media_doc_url_{campaign_id}"] = _url
+                st.session_state[f"_media_doc_name_{campaign_id}"] = _nm
+        _media_doc = st.session_state.get(f"_media_doc_url_{campaign_id}") \
+            or _camp0.get("document_url") or ""
+        _media_doc_name = st.session_state.get(f"_media_doc_name_{campaign_id}") \
+            or _camp0.get("document_name") or ""
+        if _media_doc:
+            st.caption(f"📄 {_media_doc_name}")
+            if st.button(t("send.media_remove", lang), key=f"media_rm_doc_{campaign_id}"):
+                for _k in (f"_media_doc_url_{campaign_id}",
+                           f"_media_doc_name_{campaign_id}", _skey):
+                    st.session_state.pop(_k, None)
+                run_async(database.set_campaign_media(campaign_id))
+                st.rerun()
+
     # --- Random delay range + blast limits ---
     st.subheader(t("send.step3", lang))
     dcol1, dcol2 = st.columns(2)
@@ -821,6 +910,8 @@ elif page == "send":
         # persist limits on the campaign first
         run_async(database.update_campaign_limits(campaign_id, limit_minutes, int(limit_messages)))
         run_async(database.set_campaign_rotation(campaign_id, rotate_devices))
+        run_async(database.set_campaign_media(campaign_id, _media_img, _media_doc,
+                                              _media_doc_name))
         if schedule_it:
             if sched_dt <= datetime.now():
                 st.error(t("sched.past", lang))

@@ -36,6 +36,11 @@ WA_API_VERSION = os.getenv("WA_API_VERSION", "v21.0")
 WA_VERIFY_TOKEN = os.getenv("WA_VERIFY_TOKEN", "")
 WA_BASE_URL = f"https://graph.facebook.com/{WA_API_VERSION}/{WA_PHONE_NUMBER_ID}/messages"
 
+# Public base URL of this app (for serving uploaded media to GoWA)
+MEDIA_BASE_URL = os.getenv("MEDIA_BASE_URL", "https://wasend.masyamin.biz.id").rstrip("/")
+# Persistent upload dir (Docker volume wasend-data -> /app/data)
+UPLOAD_DIR = os.getenv("UPLOAD_DIR", "/app/data/uploads")
+
 # GoWA (self-hosted, e.g. https://whatsapp.masyamin.biz.id)
 GOWA_BASE_URL = os.getenv("GOWA_BASE_URL", "").rstrip("/")
 GOWA_USERNAME = os.getenv("GOWA_USERNAME", "")

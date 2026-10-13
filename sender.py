@@ -243,10 +243,21 @@ async def send_campaign(
             variant_id = None
 
         _wa_inst, _cur_dev = _wa_for(i)
-        result = await _wa_inst.send_message(phone, body)
+        _img = (campaign.get("image_url") or "").strip()
+        _doc = (campaign.get("document_url") or "").strip()
+        if _img:
+            result = await _wa_inst.send_image(phone, _img, body)
+            _log_content = f"[🖼️] {body[:480]}"
+        elif _doc:
+            result = await _wa_inst.send_document(
+                phone, _doc, campaign.get("document_name") or "file")
+            _log_content = f"[📄] {body[:480]}"
+        else:
+            result = await _wa_inst.send_message(phone, body)
+            _log_content = body[:500]
         await database.log_message(
             phone=phone,
-            content=body[:500],
+            content=_log_content,
             status=result["status"],
             campaign_id=campaign_id,
             contact_id=contact.get("id"),

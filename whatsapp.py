@@ -143,19 +143,45 @@ class WhatsAppClient:
 
     async def _send_gowa(self, to: str, body: str) -> dict:
         """Send via a self-hosted GoWA server (Basic Auth)."""
-        url = f"{config.GOWA_BASE_URL}/send/message"
+        return await self._post_gowa(
+            "/send/message",
+            {"phone": self.normalize_gowa_phone(to), "message": body})
+
+    async def send_image(self, to: str, image_url: str, caption: str = "") -> dict:
+        """Send an image via GoWA /send/image. Returns {"sid": ..., "status": ...}."""
+        await self._rate_limit()
+        if self.provider != "gowa":
+            return {"sid": "", "status": "failed",
+                    "error": f"Image send only supported on gowa (provider={self.provider})"}
+        # field aliases: "image" (forks) vs "image_url" (official SDK); server ignores unknown fields
+        return await self._post_gowa(
+            "/send/image",
+            {"phone": self.normalize_gowa_phone(to),
+             "image_url": image_url, "image": image_url, "caption": caption})
+
+    async def send_document(self, to: str, file_url: str, filename: str = "") -> dict:
+        """Send a file via GoWA /send/document. Returns {"sid": ..., "status": ...}."""
+        await self._rate_limit()
+        if self.provider != "gowa":
+            return {"sid": "", "status": "failed",
+                    "error": f"File send only supported on gowa (provider={self.provider})"}
+        return await self._post_gowa(
+            "/send/document",
+            {"phone": self.normalize_gowa_phone(to),
+             "document_url": file_url, "document": file_url,
+             "file_name": filename or "file", "filename": filename or "file"})
+
+    async def _post_gowa(self, endpoint: str, payload: dict) -> dict:
+        """POST JSON to a GoWA endpoint with auth + device header."""
+        url = f"{config.GOWA_BASE_URL}{endpoint}"
         headers = {"Content-Type": "application/json"}
         if self.device_id:
             headers["X-Device-Id"] = self.device_id
-        payload = {
-            "phone": self.normalize_gowa_phone(to),
-            "message": body,
-        }
         auth = (config.GOWA_USERNAME, config.GOWA_PASSWORD)
 
         try:
             resp = await asyncio.to_thread(
-                requests.post, url, json=payload, headers=headers, auth=auth, timeout=30
+                requests.post, url, json=payload, headers=headers, auth=auth, timeout=60
             )
             try:
                 result = resp.json()
@@ -170,10 +196,10 @@ class WhatsAppClient:
                 or resp.text[:200]
                 or f"HTTP {resp.status_code}"
             )
-            logger.error(f"GoWA error for {to}: {error_msg}")
+            logger.error(f"GoWA error {endpoint} for {payload.get('phone')}: {error_msg}")
             return {"sid": "", "status": "failed", "error": error_msg}
         except Exception as e:
-            logger.error(f"GoWA exception for {to}: {e}")
+            logger.error(f"GoWA exception {endpoint}: {e}")
             return {"sid": "", "status": "failed", "error": str(e)}
 
     async def send_bulk(

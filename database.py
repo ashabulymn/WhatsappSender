@@ -685,6 +685,20 @@ async def set_campaign_rotation(campaign_id: int, on: bool) -> None:
         await db.close()
 
 
+async def set_campaign_media(campaign_id: int, image_url: str = "",
+                             document_url: str = "", document_name: str = "") -> None:
+    """Persist media attachments on a campaign (one of image / document)."""
+    db = await _connect()
+    try:
+        await _ensure_extra_tables(db)
+        await db.execute(
+            "UPDATE campaigns SET image_url = ?, document_url = ?, document_name = ? WHERE id = ?",
+            (image_url or "", document_url or "", document_name or "", campaign_id))
+        await db.commit()
+    finally:
+        await db.close()
+
+
 async def delete_campaign(campaign_id: int) -> None:
     """Delete a campaign and its links. Keeps message_log for audit (campaign_id nulled)."""
     db = await _connect()
@@ -1102,7 +1116,9 @@ async def _ensure_extra_tables(db: aiosqlite.Connection):
     await db.commit()
     cols = await _table_columns(db, "campaigns")
     for col, ddl in (("max_duration_min", "REAL DEFAULT 0"), ("max_messages", "INTEGER DEFAULT 0"),
-                     ("rotate_devices", "INTEGER DEFAULT 0")):
+                     ("rotate_devices", "INTEGER DEFAULT 0"),
+                     ("image_url", "TEXT DEFAULT ''"), ("document_url", "TEXT DEFAULT ''"),
+                     ("document_name", "TEXT DEFAULT ''")):
         if col not in cols:
             await db.execute(f"ALTER TABLE campaigns ADD COLUMN {col} {ddl}")
     await db.commit()
