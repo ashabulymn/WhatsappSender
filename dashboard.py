@@ -244,9 +244,18 @@ if not st.session_state.user:
 
 user = st.session_state.user
 uid = user["id"]
-is_admin = bool(user.get("is_admin"))
+_impersonating = bool(st.session_state.get("impersonating"))
+is_admin = bool(user.get("is_admin")) and not _impersonating
 _default_dev = run_async(database.get_default_device(uid))
 device_id = _default_dev["gowa_device_id"] if _default_dev else ""
+
+if _impersonating:
+    st.warning(t("admin.impersonating", lang).format(u=user["username"]))
+    if st.button(t("admin.back_to_admin", lang), key="back_to_admin"):
+        st.session_state.user = st.session_state.get("real_admin")
+        st.session_state.impersonating = False
+        st.session_state.real_admin = None
+        st.rerun()
 
 # -- Sidebar ---------------------------------------------------
 
@@ -260,6 +269,8 @@ with st.sidebar:
         view_all = False
     if st.button(t("auth.logout", lang)):
         st.session_state.user = None
+        st.session_state.impersonating = False
+        st.session_state.real_admin = None
         st.rerun()
 
     # Language toggle
@@ -984,6 +995,18 @@ elif page == "admin" and is_admin:
                     _star = "⭐" if _dd["is_default"] else ""
                     _dlines.append(f"{_star}{_dd['device_name'] or _dd['gowa_device_id']} ({_st8})")
                 st.markdown(f"**{t('admin.user_devices', lang)}** " + ", ".join(_dlines))
+            _ucamps = run_async(database.get_all_campaigns(u["id"]))
+            if _ucamps:
+                st.markdown(f"**{t('admin.user_campaigns', lang)}**")
+                for _cc in _ucamps:
+                    _cc1, _cc2 = st.columns([4, 1])
+                    _cc1.text(f"{_cc['name']} [{_cc['status']}] ({_cc.get('contact_count', 0)})")
+                    if _cc2.button(t("admin.delete_campaign", lang), key=f"delc_{_cc['id']}"):
+                        run_async(database.delete_campaign(_cc["id"]))
+                        st.success(t("admin.campaign_deleted", lang))
+                        st.rerun()
+            else:
+                st.caption(t("admin.no_campaigns", lang))
             b1, b2 = st.columns(2)
             with b1:
                 with st.popover(t("admin.reset_pw", lang)):
@@ -994,6 +1017,11 @@ elif page == "admin" and is_admin:
                         st.success(t("admin.pw_updated", lang))
             with b2:
                 if not u["is_admin"] and u["id"] != uid:
+                    if st.button(t("admin.monitor", lang), key=f"mon_{u['id']}"):
+                        st.session_state.real_admin = st.session_state.user
+                        st.session_state.user = run_async(database.get_user(u["id"]))
+                        st.session_state.impersonating = True
+                        st.rerun()
                     if st.button(t("admin.delete", lang), key=f"delu_{u['id']}"):
                         for dd in run_async(database.get_user_devices(u["id"])):
                             gowa_device_delete(dd["gowa_device_id"])

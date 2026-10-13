@@ -674,6 +674,21 @@ async def update_campaign_limits(campaign_id: int, max_duration_min: float,
         await db.close()
 
 
+async def delete_campaign(campaign_id: int) -> None:
+    """Delete a campaign and its links. Keeps message_log for audit (campaign_id nulled)."""
+    db = await _connect()
+    try:
+        await db.execute("DELETE FROM campaign_contacts WHERE campaign_id = ?", (campaign_id,))
+        await db.execute("DELETE FROM message_variants WHERE campaign_id = ?", (campaign_id,))
+        await db.execute("DELETE FROM scheduled_messages WHERE campaign_id = ?", (campaign_id,))
+        await db.execute("UPDATE message_log SET campaign_id = NULL WHERE campaign_id = ?",
+                         (campaign_id,))
+        await db.execute("DELETE FROM campaigns WHERE id = ?", (campaign_id,))
+        await db.commit()
+    finally:
+        await db.close()
+
+
 async def update_contact(contact_id: int, user_id: int | None, first_name: str,
                          last_name: str, phone: str, email: str = "") -> bool:
     """Update a contact. Returns False if the phone clashes with another contact."""
