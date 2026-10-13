@@ -215,38 +215,78 @@ st.set_page_config(
 # Hide Streamlit's default menu (Rerun / Settings / Print) and footer
 st.markdown(
     """<style>
-#MainMenu {visibility: hidden;}
-footer {visibility: hidden;}
-/* ===== Wasend dark mode (html.wasend-dark set by the theme toggle) ===== */
-html.wasend-dark{--background-color:#0e1117;--secondary-background-color:#1c2028;--text-color:#e8eaed;color-scheme:dark;}
-html.wasend-dark body{background-color:#0e1117;}
-html.wasend-dark .stApp{background-color:#0e1117;}
-html.wasend-dark section[data-testid="stSidebar"]{background-color:#131722;}
-html.wasend-dark [data-testid="stHeader"]{background:rgba(14,17,23,.85);}
-html.wasend-dark [data-testid="stAppViewContainer"]{background-color:#0e1117;}
-html.wasend-dark .stMarkdown p,html.wasend-dark .stMarkdown li,
-html.wasend-dark h1,html.wasend-dark h2,html.wasend-dark h3,
-html.wasend-dark .stCaption,html.wasend-dark label{color:#e8eaed;}
-html.wasend-dark .stTextInput>div>div>input,
-html.wasend-dark .stTextArea>div>div>textarea,
-html.wasend-dark .stNumberInput>div>div>input,
-html.wasend-dark .stDateInput>div>div>input,
-html.wasend-dark .stTimeInput>div>div>input{background-color:#1c2028;color:#e8eaed;border-color:#3a4150;}
-html.wasend-dark div[data-baseweb="select"]{background-color:#1c2028;}
-html.wasend-dark div[data-baseweb="select"] span{color:#e8eaed;}
-html.wasend-dark .stButton>button{background-color:#1c2028;color:#e8eaed;border:1px solid #3a4150;}
-html.wasend-dark .stButton>button[kind="primary"]{background-color:#ff4b4b;border-color:#ff4b4b;color:#fff;}
-html.wasend-dark [data-testid="stExpander"]{background-color:#131722;border:1px solid #3a4150;}
-html.wasend-dark .stAlert{background-color:#1c2028;color:#e8eaed;border:1px solid #3a4150;}
-html.wasend-dark [data-testid="stMetric"]{background-color:#131722;}
-html.wasend-dark hr{border-color:#3a4150;}
-html.wasend-dark table{color:#e8eaed;}
+/* ================= Wasend design system ================= */
+:root{
+  --wa-bg:#f4f7f5; --wa-card:#ffffff; --wa-line:#e3eae5;
+  --wa-ink:#182420; --wa-muted:#64756c;
+  --wa-green:#1faa53; --wa-green-dark:#14743a; --wa-green-soft:#e7f6ec;
+}
+html.wasend-dark{
+  --wa-bg:#0c110e; --wa-card:#141a15; --wa-line:#263029;
+  --wa-ink:#e9efeb; --wa-muted:#93a298;
+  --wa-green:#25d366; --wa-green-dark:#1eb856; --wa-green-soft:#12291a;
+  --background-color:#0c110e; --secondary-background-color:#141a15;
+  --text-color:#e9efeb; color-scheme:dark;
+}
+#MainMenu{visibility:hidden;}
+footer{visibility:hidden;}
+
+/* surfaces */
+.stApp{background-color:var(--wa-bg);}
+section[data-testid="stSidebar"]{background-color:var(--wa-card);border-right:1px solid var(--wa-line);}
+[data-testid="stHeader"]{background:transparent;}
+[data-testid="stAppViewContainer"]{background-color:var(--wa-bg);}
+html.wasend-dark body{background-color:#0c110e;}
+
+/* buttons */
+.stButton>button{border-radius:10px;font-weight:600;background-color:var(--wa-card);
+  color:var(--wa-ink);border:1px solid var(--wa-line);transition:all .15s ease;}
+.stButton>button:hover{border-color:var(--wa-green);color:var(--wa-green-dark);}
+.stButton>button:active{transform:scale(.98);}
+.stButton>button[kind="primary"]{background-color:var(--wa-green);border-color:var(--wa-green);color:#fff;}
+.stButton>button[kind="primary"]:hover{background-color:var(--wa-green-dark);border-color:var(--wa-green-dark);color:#fff;}
+.stButton>button:disabled{opacity:.55;}
+
+/* inputs */
+.stTextInput>div>div>input,.stTextArea>div>div>textarea,.stNumberInput>div>div>input,
+.stDateInput>div>div>input,.stTimeInput>div>div>input{
+  border-radius:10px;background-color:var(--wa-card);color:var(--wa-ink);border:1px solid var(--wa-line);}
+.stTextInput>div>div>input:focus,.stTextArea>div>div>textarea:focus,.stNumberInput>div>div>input:focus,
+.stDateInput>div>div>input:focus,.stTimeInput>div>div>input:focus{
+  border-color:var(--wa-green);box-shadow:0 0 0 1px var(--wa-green);}
+div[data-baseweb="select"]>div{background-color:var(--wa-card);border-color:var(--wa-line);border-radius:10px;}
+
+/* metric cards */
+[data-testid="stMetric"]{background-color:var(--wa-card);border:1px solid var(--wa-line);
+  border-radius:14px;padding:12px 16px;box-shadow:0 1px 3px rgba(20,40,25,.06);}
+[data-testid="stMetricLabel"]{color:var(--wa-muted);font-weight:600;}
+
+/* expanders */
+[data-testid="stExpander"]{background-color:var(--wa-card);border:1px solid var(--wa-line);border-radius:12px;}
+
+/* alerts */
+.stAlert{border-radius:12px;}
+
+/* dataframes */
+[data-testid="stDataFrame"]{border:1px solid var(--wa-line);border-radius:12px;overflow:hidden;}
+
+/* progress */
+.stProgress>div>div>div{background-color:var(--wa-green);}
+
+/* sidebar nav */
+section[data-testid="stSidebar"] .stRadio div[role="radiogroup"]{gap:2px;}
+section[data-testid="stSidebar"] .stRadio label{border-radius:9px;padding:3px 10px !important;}
+section[data-testid="stSidebar"] .stRadio label:has(input:checked){background-color:var(--wa-green-soft);}
+section[data-testid="stSidebar"] .stRadio label:has(input:checked) p{color:var(--wa-green-dark);font-weight:700;}
+
+/* misc */
+hr{border-color:var(--wa-line);}
+a{color:var(--wa-green-dark);}
 html.wasend-dark a{color:#8ab4ff;}
-html.wasend-dark .stRadio label,html.wasend-dark .stCheckbox label{color:#e8eaed;}
+code{border-radius:6px;}
 </style>""",
     unsafe_allow_html=True,
 )
-
 # Theme toggle switch (pure client-side; default follows OS, saved in localStorage)
 _THEME_SWITCH_HTML = """
 <div style="display:flex;align-items:center;justify-content:center;gap:5px;height:38px;">
@@ -320,16 +360,21 @@ if "user" not in st.session_state:
     st.session_state.user = None
 
 if not st.session_state.user:
-    st.title(t("auth.login_title", lang))
-    username = st.text_input(t("auth.username", lang))
-    password = st.text_input(t("auth.password", lang), type="password")
-    if st.button(t("auth.login_btn", lang)):
-        u = run_async(database.get_user_by_username(username))
-        if u and database.verify_password(password, u["password_hash"]):
-            st.session_state.user = u
-            st.rerun()
-        else:
-            st.error(t("auth.wrong", lang))
+    _lg1, _lg2, _lg3 = st.columns([1, 1.5, 1])
+    with _lg2:
+        st.markdown("<div style='text-align:center;font-size:56px;line-height:1.3;'>📱</div>",
+                    unsafe_allow_html=True)
+        st.markdown(f"<h1 style='text-align:center;margin-bottom:0.5rem;'>{t('auth.login_title', lang)}</h1>",
+                    unsafe_allow_html=True)
+        username = st.text_input(t("auth.username", lang))
+        password = st.text_input(t("auth.password", lang), type="password")
+        if st.button(t("auth.login_btn", lang), type="primary", use_container_width=True):
+            u = run_async(database.get_user_by_username(username))
+            if u and database.verify_password(password, u["password_hash"]):
+                st.session_state.user = u
+                st.rerun()
+            else:
+                st.error(t("auth.wrong", lang))
     st.stop()
 
 user = st.session_state.user
