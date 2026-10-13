@@ -55,13 +55,15 @@ def run_async(coro):
         raise RuntimeError("Database operation timed out")
 
 
-def _stat(icon: str, label: str, value) -> None:
-    """DarkPan-style stat card: big icon left, label + value right."""
-    st.markdown(
+def _stat_grid(cards: list[tuple]) -> None:
+    """Responsive DarkPan stat-card grid: columns follow content width."""
+    _items = "".join(
         f"<div class='stat-card'><div class='stat-icon'>{icon}</div>"
         f"<div><div class='stat-label'>{label}</div>"
-        f"<div class='stat-value'>{value}</div></div></div>",
-        unsafe_allow_html=True)
+        f"<div class='stat-value'>{value}</div></div></div>"
+        for icon, label, value in cards)
+    st.markdown(f"<div class='stat-grid'>{_items}</div>", unsafe_allow_html=True)
+
 
 
 def init_db():
@@ -303,6 +305,7 @@ div[data-baseweb="select"]>div{background-color:var(--wa-card);border-color:var(
 .stProgress>div>div>div{background-color:var(--wa-accent);}
 
 /* DarkPan-style stat cards */
+.stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;}
 .stat-card{display:flex;align-items:center;gap:14px;background:var(--wa-card);
   border:1px solid var(--wa-line);border-radius:12px;padding:18px 16px;
   box-shadow:0 1px 3px rgba(0,0,0,.10);}
@@ -531,51 +534,25 @@ def _run_blast_thread(uid, campaign_id, variants, delay_min, delay_max,
 if page == "dashboard":
     st.title(t("dash.page_dashboard", lang))
 
-    qa1, qa2, qa3 = st.columns(3)
-    with qa1:
-        if st.button("📢 " + t("dash.page_send", lang), key="qa_send",
-                     use_container_width=True):
-            st.session_state.page = "send"
-            st.rerun()
-    with qa2:
-        if st.button("📥 " + t("dash.page_import", lang), key="qa_import",
-                     use_container_width=True):
-            st.session_state.page = "import"
-            st.rerun()
-    with qa3:
-        if st.button("👥 " + t("dash.page_contacts", lang), key="qa_contacts",
-                     use_container_width=True):
-            st.session_state.page = "contacts"
-            st.rerun()
-
     contact_count = run_async(database.get_contact_count(view_uid))
     campaigns = run_async(database.get_all_campaigns(view_uid))
     stats = run_async(database.get_send_stats(view_uid))
-
-    _s1, _s2, _s3, _s4 = st.columns(4)
-    with _s1:
-        _stat("👥", t("dash.metric_contacts", lang), contact_count)
-    with _s2:
-        _stat("📢", t("dash.metric_campaigns", lang), len(campaigns))
-    with _s3:
-        _stat("📤", t("dash.metric_sent", lang),
-              stats.get("sent", 0) + stats.get("delivered", 0))
-    with _s4:
-        _stat("❌", t("dash.metric_failed", lang), stats.get("failed", 0))
 
     total_out = sum(stats.get(s, 0) for s in ("sent", "delivered", "read", "failed"))
     delivered = stats.get("delivered", 0) + stats.get("read", 0)
     rate = (delivered / total_out * 100) if total_out > 0 else 0
 
-    _s5, _s6, _s7, _s8 = st.columns(4)
-    with _s5:
-        _stat("📈", t("dash.metric_delivery_rate", lang), f"{rate:.1f}%")
-    with _s6:
-        _stat("✅", t("dash.metric_delivered", lang), stats.get("delivered", 0))
-    with _s7:
-        _stat("👁️", t("dash.metric_read", lang), stats.get("read", 0))
-    with _s8:
-        _stat("📊", t("dash.metric_total", lang), stats.get("total", 0))
+    _stat_grid([
+        ("👥", t("dash.metric_contacts", lang), contact_count),
+        ("📢", t("dash.metric_campaigns", lang), len(campaigns)),
+        ("📤", t("dash.metric_sent", lang),
+         stats.get("sent", 0) + stats.get("delivered", 0)),
+        ("❌", t("dash.metric_failed", lang), stats.get("failed", 0)),
+        ("📈", t("dash.metric_delivery_rate", lang), f"{rate:.1f}%"),
+        ("✅", t("dash.metric_delivered", lang), stats.get("delivered", 0)),
+        ("👁️", t("dash.metric_read", lang), stats.get("read", 0)),
+        ("📊", t("dash.metric_total", lang), stats.get("total", 0)),
+    ])
 
     st.divider()
     _daily = run_async(database.get_daily_stats(view_uid, 14))
