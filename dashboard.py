@@ -209,7 +209,7 @@ st.set_page_config(
     page_title="Wasend",
     page_icon="📱",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
 # Hide Streamlit's default menu (Rerun / Settings / Print) and footer
@@ -233,7 +233,9 @@ footer{visibility:hidden;}
 
 /* surfaces */
 .stApp{background-color:var(--wa-bg);}
-section[data-testid="stSidebar"]{background-color:var(--wa-card);border-right:1px solid var(--wa-line);}
+/* sidebar removed: top-nav layout */
+section[data-testid="stSidebar"]{display:none;}
+[data-testid="collapsedControl"]{display:none;}
 [data-testid="stHeader"]{background:transparent;}
 [data-testid="stAppViewContainer"]{background-color:var(--wa-bg);}
 html.wasend-dark body{background-color:#0c110e;}
@@ -272,24 +274,6 @@ div[data-baseweb="select"]>div{background-color:var(--wa-card);border-color:var(
 
 /* progress */
 .stProgress>div>div>div{background-color:var(--wa-green);}
-
-/* sidebar nav */
-section[data-testid="stSidebar"] .stRadio div[role="radiogroup"]{gap:2px;}
-section[data-testid="stSidebar"] .stRadio label{border-radius:9px;padding:3px 10px !important;}
-section[data-testid="stSidebar"] .stRadio label:has(input:checked){background-color:var(--wa-green-soft);}
-section[data-testid="stSidebar"] .stRadio label:has(input:checked) p{color:var(--wa-green-dark);font-weight:700;}
-
-/* sidebar nav */
-.nav-group{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;
-  color:var(--wa-muted);margin:12px 4px 5px;}
-section[data-testid="stSidebar"] .stButton>button{
-  border:1px solid transparent;background:transparent;color:var(--wa-ink);
-  font-weight:500;justify-content:flex-start;text-align:left;padding:6px 12px;}
-section[data-testid="stSidebar"] .stButton>button:hover{
-  background:var(--wa-green-soft);border-color:transparent;color:var(--wa-ink);}
-section[data-testid="stSidebar"] .stButton>button[kind="primary"]{
-  background:var(--wa-green);border-color:var(--wa-green);color:#fff;font-weight:700;}
-section[data-testid="stSidebar"] .stButton>button[kind="primary"]:hover{color:#fff;}
 
 /* misc */
 hr{border-color:var(--wa-line);}
@@ -418,78 +402,62 @@ if _impersonating:
 
 # -- Sidebar ---------------------------------------------------
 
-with st.sidebar:
-    st.title("📱 Wasend")
-    st.caption(f"v{config.BOT_VERSION} | {config.WA_PROVIDER.upper()}")
-    st.markdown(t("auth.welcome", lang).format(u=user["username"]))
-    if is_admin:
-        view_all = st.checkbox(t("admin.view_all", lang), key="view_all")
-    else:
-        view_all = False
+# -- Top header ------------------------------------------------
 
-    st.divider()
-    # -- Toggles & logout (tidy, icon-only toggles) --
-    _l1, _l2, _l3 = st.columns([1, 1.2, 1])
-    with _l1:
-        st.markdown("<div style='font-size:19px;text-align:center;'>🇮🇩</div>",
-                    unsafe_allow_html=True)
-    with _l2:
-        _is_en = st.toggle("", value=(lang == "en"), key="lang_toggle",
-                           label_visibility="collapsed")
-    with _l3:
-        st.markdown("<div style='font-size:19px;text-align:center;'>🇬🇧</div>",
-                    unsafe_allow_html=True)
-    _new_lang = "en" if _is_en else "id"
-    if _new_lang != lang:
-        st.session_state.lang = _new_lang
+_hc = st.columns([2.6, 0.8, 1.8, 0.8])
+with _hc[0]:
+    st.markdown(
+        f"<div style='font-size:26px;font-weight:800;line-height:1.15;'>📱 Wasend</div>"
+        f"<div style='font-size:12px;color:var(--wa-muted);'>v{config.BOT_VERSION} · 👤 {user['username']}</div>",
+        unsafe_allow_html=True)
+with _hc[1]:
+    if st.button("🇮🇩" if lang == "id" else "🇬🇧", key="lang_btn"):
+        st.session_state.lang = "en" if lang == "id" else "id"
         st.rerun()
+with _hc[2]:
     components.html(_THEME_SWITCH_HTML, height=38)
-    if st.button("🚪 " + t("auth.logout", lang), use_container_width=True,
-                 key="logout_btn"):
+with _hc[3]:
+    if st.button("🚪", key="logout_btn"):
         st.session_state.user = None
         st.session_state.impersonating = False
         st.session_state.real_admin = None
         st.rerun()
-    st.divider()
 
-    if "page" not in st.session_state:
-        st.session_state.page = "dashboard"
-    _MENU = [
-        (t("nav.group_overview", lang), [
-            ("dashboard", t("dash.page_dashboard", lang)),
-            ("stats", t("dash.page_stats", lang)),
-        ]),
-        (t("nav.group_blast", lang), [
-            ("import", t("dash.page_import", lang)),
-            ("send", t("dash.page_send", lang)),
-            ("schedule", "🗓️ " + t("dash.page_schedule", lang)),
-        ]),
-        (t("nav.group_data", lang), [
-            ("contacts", t("dash.page_contacts", lang)),
-            ("templates", t("dash.page_templates", lang)),
-        ]),
-        (t("nav.group_device", lang), [
-            ("device", "📲 " + t("dash.page_device", lang)),
-            ("test", t("dash.page_test", lang)),
-        ]),
-        (t("nav.group_system", lang),
-         [("config", t("dash.page_config", lang))]
-         + ([("admin", "👑 " + t("dash.page_admin", lang))] if is_admin else [])),
-    ]
-    # guard: page key no longer valid (e.g. admin menu hidden while impersonating)
-    if st.session_state.page not in [k for _, items in _MENU for k, _ in items]:
-        st.session_state.page = "dashboard"
-    for _gtitle, _items in _MENU:
-        st.markdown(f"<div class='nav-group'>{_gtitle}</div>", unsafe_allow_html=True)
-        for _key, _label in _items:
-            if st.button(_label, key=f"nav_{_key}", use_container_width=True,
-                         type="primary" if st.session_state.page == _key else "secondary"):
-                st.session_state.page = _key
-                st.rerun()
-    page = st.session_state.page
+# -- Top nav (scrollable pills) --------------------------------
+if "page" not in st.session_state:
+    st.session_state.page = "dashboard"
+_NAV_KEYS = ["dashboard", "stats", "import", "send", "schedule",
+             "contacts", "templates", "device", "test", "config"] \
+            + (["admin"] if is_admin else [])
+_NAV_LABELS = {
+    "dashboard": t("dash.page_dashboard", lang),
+    "stats": t("dash.page_stats", lang),
+    "import": t("dash.page_import", lang),
+    "send": t("dash.page_send", lang),
+    "schedule": "🗓️ " + t("dash.page_schedule", lang),
+    "contacts": t("dash.page_contacts", lang),
+    "templates": t("dash.page_templates", lang),
+    "device": "📲 " + t("dash.page_device", lang),
+    "test": t("dash.page_test", lang),
+    "config": t("dash.page_config", lang),
+    "admin": "👑 " + t("dash.page_admin", lang),
+}
+if st.session_state.page not in _NAV_KEYS:
+    st.session_state.page = "dashboard"
+_sel = st.pills(t("dash.nav", lang), options=_NAV_KEYS,
+                format_func=lambda k: _NAV_LABELS[k],
+                default=st.session_state.page,
+                label_visibility="collapsed")
+if _sel != st.session_state.page:
+    st.session_state.page = _sel
+    st.rerun()
+page = st.session_state.page
 
-    st.divider()
-    st.markdown(f"[GitHub]({config.COMMUNITY_URL}) | [Site]({config.WEBSITE_URL})")
+if is_admin:
+    view_all = st.checkbox(t("admin.view_all", lang), key="view_all")
+else:
+    view_all = False
+
 
 # view_uid: None = admin melihat semua
 view_uid = None if (is_admin and view_all) else uid
