@@ -244,6 +244,7 @@ def _scheduler_loop():
             if time.time() - _janitor_last_run > 600:  # every 10 min
                 _janitor_last_run = time.time()
                 _device_janitor()
+                run_async(database.cleanup_orphan_uploads())
         except Exception as e:
             logger.error(f"Device janitor tick failed: {e}")
         time.sleep(30)

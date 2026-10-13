@@ -687,22 +687,99 @@ async def set_campaign_rotation(campaign_id: int, on: bool) -> None:
 
 async def set_campaign_media(campaign_id: int, image_url: str = "",
                              document_url: str = "", document_name: str = "") -> None:
-    """Persist media attachments on a campaign (one of image / document)."""
+    """Persist media attachments on a campaign (one of image / document).
+
+    Files that are no longer referenced by any campaign are deleted from
+    disk immediately.
+    """
     db = await _connect()
     try:
         await _ensure_extra_tables(db)
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT image_url, document_url FROM campaigns WHERE id = ?",
+            (campaign_id,))
+        row = await cur.fetchone()
+        old = {row["image_url"], row["document_url"]} if row else set()
+        new = {image_url or "", document_url or ""}
         await db.execute(
             "UPDATE campaigns SET image_url = ?, document_url = ?, document_name = ? WHERE id = ?",
             (image_url or "", document_url or "", document_name or "", campaign_id))
         await db.commit()
+        cur = await db.execute("SELECT image_url, document_url FROM campaigns")
+        refs = {_media_filename(u) for r in await cur.fetchall() for u in r if u}
     finally:
         await db.close()
+    for url in old - new:
+        name = _media_filename(url)
+        if name and name not in refs:
+            _delete_upload_file(name)
+
+
+def _media_filename(url: str) -> str:
+    """Extract our stored filename from a media URL ('' if not ours)."""
+    if not url:
+        return ""
+    name = url.rsplit("/", 1)[-1].split("?", 1)[0]
+    # only touch files we created: c<campaign>_<token>_<safe>
+    import re as _re
+    return name if _re.fullmatch(r"c\d+_[0-9a-f]{8}_.+", name) else ""
+
+
+def _delete_upload_file(name: str) -> bool:
+    """Delete one upload file by stored filename. Returns True if deleted."""
+    if not name or "/" in name or "\\" in name or name.startswith("."):
+        return False
+    path = os.path.join(config.UPLOAD_DIR, name)
+    try:
+        if os.path.isfile(path):
+            os.remove(path)
+            logging.getLogger(__name__).info("deleted upload %s", name)
+            return True
+    except Exception as e:
+        logging.getLogger(__name__).warning("delete upload %s failed: %s", name, e)
+    return False
+
+
+async def cleanup_orphan_uploads(max_age_hours: float = 24) -> int:
+    """Delete upload files not referenced by any campaign and older than max_age_hours."""
+    import time as _time
+    try:
+        names = os.listdir(config.UPLOAD_DIR)
+    except FileNotFoundError:
+        return 0
+    db = await _connect()
+    try:
+        cur = await db.execute("SELECT image_url, document_url FROM campaigns")
+        refs = {_media_filename(u) for r in await cur.fetchall() for u in r if u}
+    finally:
+        await db.close()
+    now = _time.time()
+    deleted = 0
+    for name in names:
+        if _media_filename(name) != name or name in refs:
+            continue
+        try:
+            age_h = (now - os.path.getmtime(os.path.join(config.UPLOAD_DIR, name))) / 3600
+        except OSError:
+            continue
+        if age_h >= max_age_hours and _delete_upload_file(name):
+            deleted += 1
+    if deleted:
+        logging.getLogger(__name__).info("orphan upload cleanup: %d file(s)", deleted)
+    return deleted
 
 
 async def delete_campaign(campaign_id: int) -> None:
     """Delete a campaign and its links. Keeps message_log for audit (campaign_id nulled)."""
     db = await _connect()
     try:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT image_url, document_url FROM campaigns WHERE id = ?",
+            (campaign_id,))
+        row = await cur.fetchone()
+        media_urls = {row["image_url"], row["document_url"]} if row else set()
         await db.execute("DELETE FROM campaign_contacts WHERE campaign_id = ?", (campaign_id,))
         await db.execute("DELETE FROM message_variants WHERE campaign_id = ?", (campaign_id,))
         await db.execute("DELETE FROM scheduled_messages WHERE campaign_id = ?", (campaign_id,))
@@ -710,8 +787,14 @@ async def delete_campaign(campaign_id: int) -> None:
                          (campaign_id,))
         await db.execute("DELETE FROM campaigns WHERE id = ?", (campaign_id,))
         await db.commit()
+        cur = await db.execute("SELECT image_url, document_url FROM campaigns")
+        refs = {_media_filename(u) for r in await cur.fetchall() for u in r if u}
     finally:
         await db.close()
+    for url in media_urls:
+        name = _media_filename(url)
+        if name and name not in refs:
+            _delete_upload_file(name)
 
 
 async def update_contact(contact_id: int, user_id: int | None, first_name: str,
