@@ -432,6 +432,14 @@ def _refresh_user():
 if "user" not in st.session_state:
     st.session_state.user = None
 
+# persistent login: restore from ?s= token after reload
+if not st.session_state.user:
+    _tok = st.query_params.get("s", "")
+    if _tok:
+        _u = run_async(database.get_session_user(_tok))
+        if _u:
+            st.session_state.user = _u
+
 if not st.session_state.user:
     _lg1, _lg2, _lg3 = st.columns([1, 1.5, 1])
     with _lg2:
@@ -445,6 +453,7 @@ if not st.session_state.user:
             u = run_async(database.get_user_by_username(username))
             if u and database.verify_password(password, u["password_hash"]):
                 st.session_state.user = u
+                st.query_params["s"] = run_async(database.create_session(u["id"]))
                 st.rerun()
             else:
                 st.error(t("auth.wrong", lang))
@@ -521,6 +530,8 @@ with st.sidebar:
         components.html(_THEME_SWITCH_HTML, height=38)
     if st.button("🚪 " + t("auth.logout", lang), use_container_width=True,
                  key="logout_btn"):
+        run_async(database.delete_session(st.query_params.get("s", "")))
+        st.query_params.clear()
         st.session_state.user = None
         st.session_state.impersonating = False
         st.session_state.real_admin = None

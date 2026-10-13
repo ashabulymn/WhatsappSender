@@ -1092,6 +1092,13 @@ async def _ensure_extra_tables(db: aiosqlite.Connection):
                reason TEXT DEFAULT '',
                created_at TEXT DEFAULT (datetime('now')),
                UNIQUE(user_id, phone))""")
+    # persistent login sessions (?s= token)
+    await db.execute(
+        """CREATE TABLE IF NOT EXISTS user_sessions (
+               token_hash TEXT PRIMARY KEY,
+               user_id INTEGER NOT NULL,
+               created_at TEXT DEFAULT (datetime('now')),
+               expires_at TEXT NOT NULL)""")
     await db.commit()
     cols = await _table_columns(db, "campaigns")
     for col, ddl in (("max_duration_min", "REAL DEFAULT 0"), ("max_messages", "INTEGER DEFAULT 0"),
@@ -1285,6 +1292,66 @@ async def list_blocked(user_id: int) -> list[dict]:
 async def get_blocked_phones(user_id: int) -> set[str]:
     rows = await list_blocked(user_id)
     return {r["phone"] for r in rows}
+
+
+# -- Persistent login sessions ---------------------------------
+
+_SESSION_DAYS = 30
+
+
+def _hash_token(token: str) -> str:
+    import hashlib
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+async def create_session(user_id: int) -> str:
+    """Create a persistent login token. Returns the raw token (shown once)."""
+    import secrets
+    token = secrets.token_urlsafe(32)
+    db = await _connect()
+    try:
+        await _ensure_extra_tables(db)
+        await db.execute(
+            "DELETE FROM user_sessions WHERE expires_at < datetime('now')")
+        await db.execute(
+            """INSERT INTO user_sessions (token_hash, user_id, expires_at)
+               VALUES (?, ?, datetime('now', ?))""",
+            (_hash_token(token), user_id, f"+{_SESSION_DAYS} days"))
+        await db.commit()
+        return token
+    finally:
+        await db.close()
+
+
+async def get_session_user(token: str) -> dict | None:
+    """Validate a login token; returns the user row or None."""
+    if not token:
+        return None
+    db = await _connect()
+    try:
+        await _ensure_extra_tables(db)
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            """SELECT u.* FROM user_sessions s
+               JOIN users u ON u.id = s.user_id
+               WHERE s.token_hash = ? AND s.expires_at > datetime('now')""",
+            (_hash_token(token),))
+        row = await cur.fetchone()
+        return dict(row) if row else None
+    finally:
+        await db.close()
+
+
+async def delete_session(token: str) -> None:
+    if not token:
+        return
+    db = await _connect()
+    try:
+        await db.execute("DELETE FROM user_sessions WHERE token_hash = ?",
+                         (_hash_token(token),))
+        await db.commit()
+    finally:
+        await db.close()
 
 
 async def cancel_scheduled(sched_id: int, user_id: int | None = None) -> None:
