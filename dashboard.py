@@ -284,6 +284,18 @@ hr{border-color:var(--wa-line);}
 a{color:var(--wa-green-dark);}
 html.wasend-dark a{color:#8ab4ff;}
 code{border-radius:6px;}
+
+/* dark-mode text contrast: Streamlit bakes light-theme text colors, override explicitly */
+html.wasend-dark .stMarkdown p,html.wasend-dark .stMarkdown li,
+html.wasend-dark h1,html.wasend-dark h2,html.wasend-dark h3,
+html.wasend-dark .stCaption,html.wasend-dark label,
+html.wasend-dark [data-testid="stMetricValue"],
+html.wasend-dark [data-testid="stExpander"] summary p,
+html.wasend-dark div[data-baseweb="select"] span,
+html.wasend-dark table,html.wasend-dark .stDataFrame{color:var(--wa-ink);}
+html.wasend-dark .stRadio label p,html.wasend-dark .stCheckbox label p{color:var(--wa-ink);}
+html.wasend-dark section[data-testid="stSidebar"] .stRadio label p{color:var(--wa-muted);}
+html.wasend-dark section[data-testid="stSidebar"] .stRadio label:has(input:checked) p{color:var(--wa-green);}
 </style>""",
     unsafe_allow_html=True,
 )
