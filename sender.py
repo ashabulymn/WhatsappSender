@@ -134,6 +134,7 @@ async def send_campaign(
     max_duration_min: float | None = None,
     max_messages: int | None = None,
     only_phones: list[str] | None = None,
+    rotate_devices: bool = False,
 ) -> dict:
     """
     Send a campaign with anti-ban safeguards.
@@ -144,6 +145,7 @@ async def send_campaign(
     - Play/pause/stop via get_blast_control(campaign_id).
     - Optional limits: max_duration_min (0 = unlimited), max_messages (0 = unlimited).
       None values fall back to the campaign row.
+    - rotate_devices: round-robin sends across all user devices (needs 2+).
     """
     delay_min = config.GOWA_DELAY_MIN_SECONDS if delay_min is None else max(0.5, delay_min)
     delay_max = config.GOWA_DELAY_MAX_SECONDS if delay_max is None else max(delay_min, delay_max)
@@ -185,8 +187,26 @@ async def send_campaign(
     start_ts = time.time()
 
     wa = WhatsAppClient(device_id=device_id)
+    _wa_cache: dict[str, object] = {}
+    _dev_ids: list[str] = []
+    if rotate_devices:
+        try:
+            _devs = await database.get_user_devices(user_id)
+            _dev_ids = [d["gowa_device_id"] for d in _devs if d.get("gowa_device_id")]
+        except Exception:
+            _dev_ids = []
     rng = random.Random()
 
+    def _wa_for(idx: int):
+        """Round-robin device picker (falls back to the single device)."""
+        if len(_dev_ids) >= 2:
+            _d = _dev_ids[idx % len(_dev_ids)]
+            if _d not in _wa_cache:
+                _wa_cache[_d] = WhatsAppClient(device_id=_d)
+            return _wa_cache[_d], _d
+        return wa, device_id
+
+    _cur_dev = device_id
     for i, contact in enumerate(contacts):
         if ctrl["stop"].is_set():
             results["stopped_early"] = True
@@ -222,7 +242,8 @@ async def send_campaign(
             body = render_message(campaign.get("message") or "", contact, rng)
             variant_id = None
 
-        result = await wa.send_message(phone, body)
+        _wa_inst, _cur_dev = _wa_for(i)
+        result = await _wa_inst.send_message(phone, body)
         await database.log_message(
             phone=phone,
             content=body[:500],
@@ -233,6 +254,7 @@ async def send_campaign(
             error_message=result.get("error", ""),
             user_id=user_id,
             variant_id=variant_id,
+            device_id=_cur_dev,
         )
         if result["status"] == "sent":
             results["sent"] += 1

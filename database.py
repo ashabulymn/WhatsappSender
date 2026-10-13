@@ -674,6 +674,17 @@ async def update_campaign_limits(campaign_id: int, max_duration_min: float,
         await db.close()
 
 
+async def set_campaign_rotation(campaign_id: int, on: bool) -> None:
+    """Persist the device-rotation flag on a campaign."""
+    db = await _connect()
+    try:
+        await db.execute("UPDATE campaigns SET rotate_devices = ? WHERE id = ?",
+                         (1 if on else 0, campaign_id))
+        await db.commit()
+    finally:
+        await db.close()
+
+
 async def delete_campaign(campaign_id: int) -> None:
     """Delete a campaign and its links. Keeps message_log for audit (campaign_id nulled)."""
     db = await _connect()
@@ -825,17 +836,43 @@ async def log_message(
     error_message: str = "",
     user_id: int = 1,
     variant_id: int | None = None,
+    device_id: str = "",
 ) -> int:
     db = await _connect()
     try:
         cursor = await db.execute(
             """INSERT INTO message_log
-               (user_id, contact_id, campaign_id, phone, content, status, wa_message_id, error_message, variant_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (user_id, contact_id, campaign_id, phone, content, status, wa_message_id, error_message, variant_id),
+               (user_id, contact_id, campaign_id, phone, content, status, wa_message_id, error_message, variant_id, device_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (user_id, contact_id, campaign_id, phone, content, status, wa_message_id, error_message, variant_id, device_id),
         )
         await db.commit()
         return cursor.lastrowid or 0
+    finally:
+        await db.close()
+
+
+async def get_message_logs(user_id: int | None, campaign_id: int | None = None,
+                         limit: int = 5000) -> list[dict]:
+    """Message log rows for CSV export (newest first)."""
+    db = await _connect()
+    try:
+        await _ensure_extra_tables(db)
+        db.row_factory = aiosqlite.Row
+        where, params = _user_filter(user_id)
+        q = """SELECT sent_at, phone, status, device_id, error_message, campaign_id
+               FROM message_log"""
+        if where:
+            q += " " + where
+            if campaign_id:
+                q += " AND campaign_id = ?"
+                params = (*params, campaign_id)
+        elif campaign_id:
+            q += " WHERE campaign_id = ?"
+            params = (campaign_id,)
+        q += " ORDER BY id DESC LIMIT ?"
+        cur = await db.execute(q, (*params, limit))
+        return [dict(r) for r in await cur.fetchall()]
     finally:
         await db.close()
 
@@ -1038,6 +1075,8 @@ async def _ensure_extra_tables(db: aiosqlite.Connection):
     cols = await _table_columns(db, "message_log")
     if "variant_id" not in cols:
         await db.execute("ALTER TABLE message_log ADD COLUMN variant_id INTEGER")
+    if "device_id" not in cols:
+        await db.execute("ALTER TABLE message_log ADD COLUMN device_id TEXT DEFAULT ''")
     cols = await _table_columns(db, "scheduled_messages")
     for col, ddl in (("delay_min", "REAL DEFAULT 15"), ("delay_max", "REAL DEFAULT 30"),
                      ("device_id", "TEXT DEFAULT ''"),
@@ -1055,7 +1094,8 @@ async def _ensure_extra_tables(db: aiosqlite.Connection):
                UNIQUE(user_id, phone))""")
     await db.commit()
     cols = await _table_columns(db, "campaigns")
-    for col, ddl in (("max_duration_min", "REAL DEFAULT 0"), ("max_messages", "INTEGER DEFAULT 0")):
+    for col, ddl in (("max_duration_min", "REAL DEFAULT 0"), ("max_messages", "INTEGER DEFAULT 0"),
+                     ("rotate_devices", "INTEGER DEFAULT 0")):
         if col not in cols:
             await db.execute(f"ALTER TABLE campaigns ADD COLUMN {col} {ddl}")
     await db.commit()

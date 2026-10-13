@@ -104,6 +104,7 @@ def _process_scheduled(s: dict):
                 device_id=device_id,
                 max_duration_min=campaign.get("max_duration_min") or 0,
                 max_messages=campaign.get("max_messages") or 0,
+                rotate_devices=bool(campaign.get("rotate_devices")),
             ))
             err = "" if result["failed"] == 0 else f"{result['failed']} failed"
             run_async(database.update_scheduled_status(
@@ -540,14 +541,15 @@ def _need_device() -> bool:
 
 
 def _run_blast_thread(uid, campaign_id, variants, delay_min, delay_max,
-                      device_id, max_dur, max_msg, only_phones=None):
+                      device_id, max_dur, max_msg, only_phones=None,
+                      rotate_devices=False):
     """Background blast runner (daemon thread). Progress via blast control."""
     try:
         run_async(sender.send_campaign(
             user_id=uid, campaign_id=campaign_id, variants=variants,
             delay_min=delay_min, delay_max=delay_max, device_id=device_id,
             max_duration_min=max_dur, max_messages=max_msg,
-            only_phones=only_phones,
+            only_phones=only_phones, rotate_devices=rotate_devices,
         ))
     except Exception as e:
         logger.error("Blast thread failed: %s", e)
@@ -687,6 +689,7 @@ elif page == "send":
     # --- Device picker (when user has more than one device) ---
     _devs = run_async(database.get_user_devices(uid))
     send_device_id = device_id
+    rotate_devices = False
     if len(_devs) > 1:
         _dopts = {}
         for _d in _devs:
@@ -700,6 +703,11 @@ elif page == "send":
                                 list(_dopts.keys()),
                                 index=list(_dopts.keys()).index(_def_lbl))
         send_device_id = _dopts[_sel_lbl]
+        _camp = run_async(database.get_campaign(campaign_id)) or {}
+        rotate_devices = st.checkbox(
+            t("send.rotate_devices", lang),
+            value=bool(_camp.get("rotate_devices")),
+            help=t("send.rotate_help", lang))
 
     # --- Message variants ---
     st.subheader(t("send.step2", lang))
@@ -801,6 +809,7 @@ elif page == "send":
                  disabled=(not variants_input or not contacts or _blast_active)):
         # persist limits on the campaign first
         run_async(database.update_campaign_limits(campaign_id, limit_minutes, int(limit_messages)))
+        run_async(database.set_campaign_rotation(campaign_id, rotate_devices))
         if schedule_it:
             if sched_dt <= datetime.now():
                 st.error(t("sched.past", lang))
@@ -829,7 +838,8 @@ elif page == "send":
             th = threading.Thread(
                 target=_run_blast_thread,
                 args=(uid, campaign_id, db_variants, delay_min, delay_max,
-                      send_device_id, limit_minutes, int(limit_messages)),
+                      send_device_id, limit_minutes, int(limit_messages),
+                      None, rotate_devices),
                 daemon=True,
             )
             th.start()
@@ -874,6 +884,14 @@ elif page == "send":
         st.info(t("blast.finished", lang).format(
             s=_ctrl["sent"], f=_ctrl["failed"],
             status=t("blast.st_" + _st, lang)) + _rsuffix)
+        # completion toast (once per finished blast)
+        _pkey = f"_blast_prev_{campaign_id}"
+        _prev = st.session_state.get(_pkey)
+        if _prev in ("running", "paused") and _st != _prev:
+            _icon = "✅" if _st == "done" else "⚠️"
+            st.toast(f"{_icon} " + t("blast.toast_done", lang).format(
+                s=_ctrl["sent"], f=_ctrl["failed"]), icon=_icon)
+    st.session_state[f"_blast_prev_{campaign_id}"] = _st
 
     # --- Retry failed ---
     _failed = run_async(database.get_failed_phones(uid, campaign_id))
@@ -893,7 +911,7 @@ elif page == "send":
                 target=_run_blast_thread,
                 args=(uid, campaign_id, _rvariants, delay_min, delay_max,
                       send_device_id, limit_minutes, int(limit_messages),
-                      [f["phone"] for f in _failed]),
+                      [f["phone"] for f in _failed], rotate_devices),
                 daemon=True,
             )
             th.start()
@@ -1080,6 +1098,29 @@ elif page == "stats":
         st.dataframe(df_msg[display_cols], use_container_width=True)
     else:
         st.caption(t("dash.no_messages", lang))
+
+    # --- Export log to CSV ---
+    st.divider()
+    st.subheader(t("stats.export_title", lang))
+    _exp_camps = run_async(database.get_all_campaigns(view_uid))
+    _exp_opts = {t("stats.export_all", lang): None}
+    _exp_opts.update({c["name"]: c["id"] for c in _exp_camps})
+    _exp_sel = st.selectbox(t("stats.export_campaign", lang), list(_exp_opts.keys()))
+    _rows = run_async(database.get_message_logs(view_uid, _exp_opts[_exp_sel]))
+    if _rows:
+        import csv as _csv, io as _io
+        _buf = _io.StringIO()
+        _w = _csv.DictWriter(_buf, fieldnames=["sent_at", "phone", "status", "device_id",
+                                              "campaign_id", "error_message"])
+        _w.writeheader()
+        _w.writerows(_rows)
+        st.download_button(
+            t("stats.export_btn", lang).format(n=len(_rows)),
+            data=_buf.getvalue().encode("utf-8"),
+            file_name=f"wasend-log-{datetime.now().strftime('%Y%m%d-%H%M')}.csv",
+            mime="text/csv")
+    else:
+        st.caption(t("stats.export_empty", lang))
 
 
 # -- Templates Page --------------------------------------------
