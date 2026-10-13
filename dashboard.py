@@ -248,9 +248,12 @@ section[data-testid="stSidebar"]{background-color:var(--wa-card);border-right:1p
 /* DarkPan sidebar menu */
 .side-profile{display:flex;align-items:center;gap:12px;background:var(--wa-bg);
   border:1px solid var(--wa-line);border-radius:12px;padding:12px;margin:4px 0 4px;}
+section[data-testid="stSidebar"] .stButton>button,
+section[data-testid="stSidebar"] .stButton>button *{
+  justify-content:flex-start !important;text-align:left !important;}
 section[data-testid="stSidebar"] .stButton>button{
   border:1px solid transparent;background:transparent;color:var(--wa-muted);
-  font-weight:600;justify-content:flex-start !important;text-align:left !important;
+  font-weight:600;
   padding:9px 0 !important;border-radius:10px;}
 section[data-testid="stSidebar"] .stButton>button div[data-testid="stMarkdownContainer"],
 section[data-testid="stSidebar"] .stButton>button div[data-testid="stMarkdownContainer"] p{
