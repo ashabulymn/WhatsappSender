@@ -347,32 +347,6 @@ if _impersonating:
         st.session_state.real_admin = None
         st.rerun()
 
-# -- Top bar: language toggle, theme toggle, logout (icon-only) --
-_tb1, _tb2, _tb3, _tb4, _tb5 = st.columns([0.55, 0.85, 0.55, 1.5, 2.55])
-with _tb1:
-    st.markdown("<div style='font-size:20px;text-align:center;height:38px;"
-                "display:flex;align-items:center;justify-content:center;'>🇮🇩</div>",
-                unsafe_allow_html=True)
-with _tb2:
-    _is_en = st.toggle("", value=(lang == "en"), key="lang_toggle",
-                       label_visibility="collapsed")
-with _tb3:
-    st.markdown("<div style='font-size:20px;text-align:center;height:38px;"
-                "display:flex;align-items:center;justify-content:center;'>🇬🇧</div>",
-                unsafe_allow_html=True)
-with _tb4:
-    components.html(_THEME_SWITCH_HTML, height=38)
-with _tb5:
-    if st.button("🚪", key="logout_top"):
-        st.session_state.user = None
-        st.session_state.impersonating = False
-        st.session_state.real_admin = None
-        st.rerun()
-_new_lang = "en" if _is_en else "id"
-if _new_lang != lang:
-    st.session_state.lang = _new_lang
-    st.rerun()
-
 # -- Sidebar ---------------------------------------------------
 
 with st.sidebar:
@@ -383,11 +357,31 @@ with st.sidebar:
         view_all = st.checkbox(t("admin.view_all", lang), key="view_all")
     else:
         view_all = False
-    if st.button(t("auth.logout", lang)):
+
+    st.divider()
+    # -- Toggles & logout (tidy, icon-only toggles) --
+    _l1, _l2, _l3 = st.columns([1, 1.2, 1])
+    with _l1:
+        st.markdown("<div style='font-size:19px;text-align:center;'>🇮🇩</div>",
+                    unsafe_allow_html=True)
+    with _l2:
+        _is_en = st.toggle("", value=(lang == "en"), key="lang_toggle",
+                           label_visibility="collapsed")
+    with _l3:
+        st.markdown("<div style='font-size:19px;text-align:center;'>🇬🇧</div>",
+                    unsafe_allow_html=True)
+    _new_lang = "en" if _is_en else "id"
+    if _new_lang != lang:
+        st.session_state.lang = _new_lang
+        st.rerun()
+    components.html(_THEME_SWITCH_HTML, height=38)
+    if st.button("🚪 " + t("auth.logout", lang), use_container_width=True,
+                 key="logout_btn"):
         st.session_state.user = None
         st.session_state.impersonating = False
         st.session_state.real_admin = None
         st.rerun()
+    st.divider()
 
     pages = [
         ("dashboard", t("dash.page_dashboard", lang)),
