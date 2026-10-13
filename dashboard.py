@@ -279,6 +279,18 @@ section[data-testid="stSidebar"] .stRadio label{border-radius:9px;padding:3px 10
 section[data-testid="stSidebar"] .stRadio label:has(input:checked){background-color:var(--wa-green-soft);}
 section[data-testid="stSidebar"] .stRadio label:has(input:checked) p{color:var(--wa-green-dark);font-weight:700;}
 
+/* sidebar nav */
+.nav-group{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;
+  color:var(--wa-muted);margin:12px 4px 5px;}
+section[data-testid="stSidebar"] .stButton>button{
+  border:1px solid transparent;background:transparent;color:var(--wa-ink);
+  font-weight:500;justify-content:flex-start;text-align:left;padding:6px 12px;}
+section[data-testid="stSidebar"] .stButton>button:hover{
+  background:var(--wa-green-soft);border-color:transparent;color:var(--wa-ink);}
+section[data-testid="stSidebar"] .stButton>button[kind="primary"]{
+  background:var(--wa-green);border-color:var(--wa-green);color:#fff;font-weight:700;}
+section[data-testid="stSidebar"] .stButton>button[kind="primary"]:hover{color:#fff;}
+
 /* misc */
 hr{border-color:var(--wa-line);}
 a{color:var(--wa-green-dark);}
@@ -440,23 +452,41 @@ with st.sidebar:
         st.rerun()
     st.divider()
 
-    pages = [
-        ("dashboard", t("dash.page_dashboard", lang)),
-        ("import", t("dash.page_import", lang)),
-        ("send", t("dash.page_send", lang)),
-        ("schedule", t("dash.page_schedule", lang)),
-        ("contacts", t("dash.page_contacts", lang)),
-        ("stats", t("dash.page_stats", lang)),
-        ("templates", t("dash.page_templates", lang)),
-        ("device", t("dash.page_device", lang)),
-        ("test", t("dash.page_test", lang)),
-        ("config", t("dash.page_config", lang)),
+    if "page" not in st.session_state:
+        st.session_state.page = "dashboard"
+    _MENU = [
+        (t("nav.group_overview", lang), [
+            ("dashboard", t("dash.page_dashboard", lang)),
+            ("stats", t("dash.page_stats", lang)),
+        ]),
+        (t("nav.group_blast", lang), [
+            ("import", t("dash.page_import", lang)),
+            ("send", t("dash.page_send", lang)),
+            ("schedule", "🗓️ " + t("dash.page_schedule", lang)),
+        ]),
+        (t("nav.group_data", lang), [
+            ("contacts", t("dash.page_contacts", lang)),
+            ("templates", t("dash.page_templates", lang)),
+        ]),
+        (t("nav.group_device", lang), [
+            ("device", "📲 " + t("dash.page_device", lang)),
+            ("test", t("dash.page_test", lang)),
+        ]),
+        (t("nav.group_system", lang),
+         [("config", t("dash.page_config", lang))]
+         + ([("admin", "👑 " + t("dash.page_admin", lang))] if is_admin else [])),
     ]
-    if is_admin:
-        pages.append(("admin", t("dash.page_admin", lang)))
-    labels = [label for _, label in pages]
-    choice = st.radio(t("dash.nav", lang), labels)
-    page = pages[labels.index(choice)][0]
+    # guard: page key no longer valid (e.g. admin menu hidden while impersonating)
+    if st.session_state.page not in [k for _, items in _MENU for k, _ in items]:
+        st.session_state.page = "dashboard"
+    for _gtitle, _items in _MENU:
+        st.markdown(f"<div class='nav-group'>{_gtitle}</div>", unsafe_allow_html=True)
+        for _key, _label in _items:
+            if st.button(_label, key=f"nav_{_key}", use_container_width=True,
+                         type="primary" if st.session_state.page == _key else "secondary"):
+                st.session_state.page = _key
+                st.rerun()
+    page = st.session_state.page
 
     st.divider()
     st.markdown(f"[GitHub]({config.COMMUNITY_URL}) | [Site]({config.WEBSITE_URL})")
@@ -493,6 +523,23 @@ def _run_blast_thread(uid, campaign_id, variants, delay_min, delay_max,
 
 if page == "dashboard":
     st.title(t("dash.page_dashboard", lang))
+
+    qa1, qa2, qa3 = st.columns(3)
+    with qa1:
+        if st.button("📢 " + t("dash.page_send", lang), key="qa_send",
+                     use_container_width=True):
+            st.session_state.page = "send"
+            st.rerun()
+    with qa2:
+        if st.button("📥 " + t("dash.page_import", lang), key="qa_import",
+                     use_container_width=True):
+            st.session_state.page = "import"
+            st.rerun()
+    with qa3:
+        if st.button("👥 " + t("dash.page_contacts", lang), key="qa_contacts",
+                     use_container_width=True):
+            st.session_state.page = "contacts"
+            st.rerun()
 
     contact_count = run_async(database.get_contact_count(view_uid))
     campaigns = run_async(database.get_all_campaigns(view_uid))
@@ -592,6 +639,7 @@ elif page == "send":
     selected = st.selectbox(t("dash.campaign_label", lang), list(campaign_options.keys()))
     campaign_id = campaign_options[selected]
 
+    st.subheader(t("send.step1", lang))
     contacts = run_async(database.get_contacts_for_campaign(campaign_id))
     st.info(t("dash.contacts_in_this_campaign", lang).format(n=len(contacts)))
 
@@ -613,7 +661,7 @@ elif page == "send":
         send_device_id = _dopts[_sel_lbl]
 
     # --- Message variants ---
-    st.subheader(t("send.variants_label", lang))
+    st.subheader(t("send.step2", lang))
     if "variant_count" not in st.session_state:
         st.session_state.variant_count = 1
     # preload saved variants for this campaign
@@ -644,8 +692,8 @@ elif page == "send":
         v = sender.pick_variant([{"body": b, "weight": 1} for b in variants_input])
         st.text(sender.render_message(v["body"], sample))
 
-    # --- Random delay range ---
-    st.subheader(t("send.delay_label", lang))
+    # --- Random delay range + blast limits ---
+    st.subheader(t("send.step3", lang))
     dcol1, dcol2 = st.columns(2)
     delay_min = dcol1.number_input(t("send.delay_min", lang), min_value=1.0, value=15.0, step=1.0)
     delay_max = dcol2.number_input(t("send.delay_max", lang), min_value=1.0, value=30.0, step=1.0)
@@ -664,6 +712,7 @@ elif page == "send":
         value=int(_camp_row.get("max_messages") or 0))
 
     # --- Send now or schedule ---
+    st.subheader(t("send.step4", lang))
     schedule_it = st.checkbox(t("send.schedule_toggle", lang))
     sched_dt = None
     if schedule_it:
