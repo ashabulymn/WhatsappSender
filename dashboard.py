@@ -211,6 +211,12 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+# Hide Streamlit's default menu (Rerun / Settings / Print) and footer
+st.markdown(
+    "<style>#MainMenu {visibility: hidden;} footer {visibility: hidden;}</style>",
+    unsafe_allow_html=True,
+)
+
 # -- Language --------------------------------------------------
 if "lang" not in st.session_state:
     st.session_state.lang = config.APP_LANG
@@ -253,6 +259,16 @@ if _impersonating:
     st.warning(t("admin.impersonating", lang).format(u=user["username"]))
     if st.button(t("admin.back_to_admin", lang), key="back_to_admin"):
         st.session_state.user = st.session_state.get("real_admin")
+        st.session_state.impersonating = False
+        st.session_state.real_admin = None
+        st.rerun()
+
+# -- Top bar logout (always visible, mobile-friendly) -----------
+_t1, _t2 = st.columns([4, 1])
+with _t2:
+    if st.button("🚪 " + t("auth.logout", lang), key="logout_top",
+                 use_container_width=True):
+        st.session_state.user = None
         st.session_state.impersonating = False
         st.session_state.real_admin = None
         st.rerun()
