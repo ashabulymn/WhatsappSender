@@ -313,6 +313,14 @@ div[data-baseweb="select"]>div{background-color:var(--wa-card);border-color:var(
 .stat-label{font-size:13px;color:var(--wa-muted);margin-bottom:2px;}
 .stat-value{font-size:26px;font-weight:800;color:var(--wa-ink);line-height:1.1;}
 
+/* responsive: stack columns vertically on small screens */
+@media (max-width: 640px){
+  div[data-testid="stHorizontalBlock"]{flex-wrap:wrap !important;}
+  div[data-testid="stHorizontalBlock"]>div{
+    flex:1 1 100% !important;min-width:100% !important;max-width:100% !important;}
+  .stat-grid{grid-template-columns:repeat(auto-fit,minmax(160px,1fr)) !important;}
+}
+
 /* misc */
 hr{border-color:var(--wa-line);}
 a{color:var(--wa-accent-dark);}
