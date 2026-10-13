@@ -218,7 +218,7 @@ st.set_page_config(
     page_title="Wasend",
     page_icon="📱",
     layout="wide",
-    initial_sidebar_state="collapsed",
+    initial_sidebar_state="expanded",
 )
 
 # Hide Streamlit's default menu (Rerun / Settings / Print) and footer
@@ -242,10 +242,22 @@ footer{visibility:hidden;}
 
 /* surfaces */
 .stApp{background-color:var(--wa-bg);}
-/* sidebar removed: top-nav layout */
-section[data-testid="stSidebar"]{display:none;}
-[data-testid="collapsedControl"]{display:none;}
+section[data-testid="stSidebar"]{background-color:var(--wa-card);border-right:1px solid var(--wa-line);}
 [data-testid="stHeader"]{background:transparent;}
+
+/* DarkPan sidebar menu */
+.side-profile{display:flex;align-items:center;gap:12px;background:var(--wa-bg);
+  border:1px solid var(--wa-line);border-radius:12px;padding:12px;margin:4px 0 4px;}
+section[data-testid="stSidebar"] .stButton>button{
+  border:1px solid transparent;background:transparent;color:var(--wa-muted);
+  font-weight:600;justify-content:flex-start;text-align:left;
+  padding:9px 14px;border-radius:10px;}
+section[data-testid="stSidebar"] .stButton>button:hover{
+  background:var(--wa-accent-soft);border-color:transparent;color:var(--wa-ink);}
+section[data-testid="stSidebar"] .stButton>button[kind="primary"]{
+  background:var(--wa-accent-soft);border-color:var(--wa-accent);
+  color:var(--wa-accent);font-weight:700;}
+section[data-testid="stSidebar"] .stButton>button[kind="primary"]:hover{color:var(--wa-accent);}
 [data-testid="stAppViewContainer"]{background-color:var(--wa-bg);}
 html.wasend-dark body{background-color:#0d0f12;}
 
@@ -283,28 +295,6 @@ div[data-baseweb="select"]>div{background-color:var(--wa-card);border-color:var(
 
 /* progress */
 .stProgress>div>div>div{background-color:var(--wa-accent);}
-
-/* DarkPan-style top menu (pills) */
-[data-testid="stPills"]{gap:8px;overflow-x:auto;padding:2px;}
-[data-testid="stPills"] button{
-  background-color:var(--wa-card) !important;
-  border:1px solid var(--wa-line) !important;
-  color:var(--wa-muted) !important;
-  border-radius:10px !important;
-  font-weight:600 !important;
-  padding:8px 16px !important;
-  white-space:nowrap;
-}
-[data-testid="stPills"] button:hover{
-  border-color:var(--wa-accent) !important;
-  color:var(--wa-ink) !important;
-}
-[data-testid="stPills"] button[aria-pressed="true"]{
-  background-color:var(--wa-accent-soft) !important;
-  border-color:var(--wa-accent) !important;
-  color:var(--wa-accent) !important;
-  font-weight:700 !important;
-}
 
 /* DarkPan-style stat cards */
 .stat-card{display:flex;align-items:center;gap:14px;background:var(--wa-card);
@@ -441,61 +431,65 @@ if _impersonating:
 
 # -- Sidebar ---------------------------------------------------
 
-# -- Top header ------------------------------------------------
+# -- Sidebar (DarkPan style) -----------------------------------
 
-_hc = st.columns([2.6, 0.8, 1.8, 0.8])
-with _hc[0]:
+with st.sidebar:
     st.markdown(
-        f"<div style='font-size:26px;font-weight:800;line-height:1.15;'>📱 Wasend</div>"
-        f"<div style='font-size:12px;color:var(--wa-muted);'>v{config.BOT_VERSION} · 👤 {user['username']}</div>",
+        "<div style='font-size:24px;font-weight:800;color:var(--wa-accent);"
+        "line-height:1.15;'>📱 Wasend</div>"
+        f"<div style='font-size:11px;color:var(--wa-muted);margin-bottom:8px;'>"
+        f"v{config.BOT_VERSION} | {config.WA_PROVIDER.upper()}</div>",
         unsafe_allow_html=True)
-with _hc[1]:
-    if st.button("🇮🇩" if lang == "id" else "🇬🇧", key="lang_btn"):
-        st.session_state.lang = "en" if lang == "id" else "id"
-        st.rerun()
-with _hc[2]:
-    components.html(_THEME_SWITCH_HTML, height=38)
-with _hc[3]:
-    if st.button("🚪", key="logout_btn"):
+    _role = t("role.admin", lang) if is_admin else t("role.user", lang)
+    st.markdown(
+        f"<div class='side-profile'><div style='font-size:30px;line-height:1;'>👤</div>"
+        f"<div><div style='font-weight:700;color:var(--wa-ink);'>{user['username']}</div>"
+        f"<div style='font-size:12px;color:var(--wa-muted);'>{_role}</div></div></div>",
+        unsafe_allow_html=True)
+    if is_admin:
+        view_all = st.checkbox(t("admin.view_all", lang), key="view_all")
+    else:
+        view_all = False
+
+    st.divider()
+    if "page" not in st.session_state:
+        st.session_state.page = "dashboard"
+    _NAV_ITEMS = [
+        ("dashboard", t("dash.page_dashboard", lang)),
+        ("stats", t("dash.page_stats", lang)),
+        ("import", t("dash.page_import", lang)),
+        ("send", t("dash.page_send", lang)),
+        ("schedule", "🗓️ " + t("dash.page_schedule", lang)),
+        ("contacts", t("dash.page_contacts", lang)),
+        ("templates", t("dash.page_templates", lang)),
+        ("device", "📲 " + t("dash.page_device", lang)),
+        ("test", t("dash.page_test", lang)),
+        ("config", t("dash.page_config", lang)),
+    ] + ([("admin", "👑 " + t("dash.page_admin", lang))] if is_admin else [])
+    if st.session_state.page not in [k for k, _ in _NAV_ITEMS]:
+        st.session_state.page = "dashboard"
+    for _key, _label in _NAV_ITEMS:
+        if st.button(_label, key=f"nav_{_key}", use_container_width=True,
+                     type="primary" if st.session_state.page == _key else "secondary"):
+            st.session_state.page = _key
+            st.rerun()
+    page = st.session_state.page
+
+    st.divider()
+    _b1, _b2 = st.columns([1, 1.7])
+    with _b1:
+        if st.button("🇮🇩" if lang == "id" else "🇬🇧", key="lang_btn"):
+            st.session_state.lang = "en" if lang == "id" else "id"
+            st.rerun()
+    with _b2:
+        components.html(_THEME_SWITCH_HTML, height=38)
+    if st.button("🚪 " + t("auth.logout", lang), use_container_width=True,
+                 key="logout_btn"):
         st.session_state.user = None
         st.session_state.impersonating = False
         st.session_state.real_admin = None
         st.rerun()
-
-# -- Top nav (scrollable pills) --------------------------------
-if "page" not in st.session_state:
-    st.session_state.page = "dashboard"
-_NAV_KEYS = ["dashboard", "stats", "import", "send", "schedule",
-             "contacts", "templates", "device", "test", "config"] \
-            + (["admin"] if is_admin else [])
-_NAV_LABELS = {
-    "dashboard": t("dash.page_dashboard", lang),
-    "stats": t("dash.page_stats", lang),
-    "import": t("dash.page_import", lang),
-    "send": t("dash.page_send", lang),
-    "schedule": "🗓️ " + t("dash.page_schedule", lang),
-    "contacts": t("dash.page_contacts", lang),
-    "templates": t("dash.page_templates", lang),
-    "device": "📲 " + t("dash.page_device", lang),
-    "test": t("dash.page_test", lang),
-    "config": t("dash.page_config", lang),
-    "admin": "👑 " + t("dash.page_admin", lang),
-}
-if st.session_state.page not in _NAV_KEYS:
-    st.session_state.page = "dashboard"
-_sel = st.pills(t("dash.nav", lang), options=_NAV_KEYS,
-                format_func=lambda k: _NAV_LABELS[k],
-                default=st.session_state.page,
-                label_visibility="collapsed")
-if _sel != st.session_state.page:
-    st.session_state.page = _sel
-    st.rerun()
-page = st.session_state.page
-
-if is_admin:
-    view_all = st.checkbox(t("admin.view_all", lang), key="view_all")
-else:
-    view_all = False
+    st.markdown(f"[GitHub]({config.COMMUNITY_URL}) | [Site]({config.WEBSITE_URL})")
 
 
 # view_uid: None = admin melihat semua
