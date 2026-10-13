@@ -852,6 +852,27 @@ async def update_message_status(wa_message_id: str, status: str) -> None:
         await db.close()
 
 
+async def get_daily_stats(user_id: int | None = None, days: int = 14) -> list[dict]:
+    """Messages per day for the last N days: [{date, sent, failed}]."""
+    db = await _connect()
+    try:
+        where, params = _user_filter(user_id)
+        q = """SELECT substr(sent_at, 1, 10) AS d,
+                      SUM(CASE WHEN status IN ('sent','delivered','read') THEN 1 ELSE 0 END) AS sent,
+                      SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed
+               FROM message_log """
+        if where:
+            q += where + " AND sent_at >= datetime('now', '-' || ? || ' days')"
+        else:
+            q += "WHERE sent_at >= datetime('now', '-' || ? || ' days')"
+        q += " GROUP BY d ORDER BY d"
+        cur = await db.execute(q, (*params, days))
+        rows = await cur.fetchall()
+        return [{"date": r[0], "sent": r[1] or 0, "failed": r[2] or 0} for r in rows]
+    finally:
+        await db.close()
+
+
 async def get_send_stats(user_id: int | None = None) -> dict:
     """Get overall sending statistics (per user, or all for admin)."""
     db = await _connect()

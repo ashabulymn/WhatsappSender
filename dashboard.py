@@ -55,6 +55,15 @@ def run_async(coro):
         raise RuntimeError("Database operation timed out")
 
 
+def _stat(icon: str, label: str, value) -> None:
+    """DarkPan-style stat card: big icon left, label + value right."""
+    st.markdown(
+        f"<div class='stat-card'><div class='stat-icon'>{icon}</div>"
+        f"<div><div class='stat-label'>{label}</div>"
+        f"<div class='stat-value'>{value}</div></div></div>",
+        unsafe_allow_html=True)
+
+
 def init_db():
     if "db_init" not in st.session_state:
         run_async(database.init())
@@ -219,13 +228,13 @@ st.markdown(
 :root{
   --wa-bg:#f4f7f5; --wa-card:#ffffff; --wa-line:#e3eae5;
   --wa-ink:#182420; --wa-muted:#64756c;
-  --wa-green:#1faa53; --wa-green-dark:#14743a; --wa-green-soft:#e7f6ec;
+  --wa-accent:#eb1616; --wa-accent-dark:#c41212; --wa-accent-soft:#fdecec;
 }
 html.wasend-dark{
-  --wa-bg:#0c110e; --wa-card:#141a15; --wa-line:#263029;
+  --wa-bg:#0d0f12; --wa-card:#191c24; --wa-line:#2b303c;
   --wa-ink:#e9efeb; --wa-muted:#93a298;
-  --wa-green:#25d366; --wa-green-dark:#1eb856; --wa-green-soft:#12291a;
-  --background-color:#0c110e; --secondary-background-color:#141a15;
+  --wa-accent:#eb1616; --wa-accent-dark:#ff5a5a; --wa-accent-soft:#2b1215;
+  --background-color:#0d0f12; --secondary-background-color:#191c24;
   --text-color:#e9efeb; color-scheme:dark;
 }
 #MainMenu{visibility:hidden;}
@@ -238,15 +247,15 @@ section[data-testid="stSidebar"]{display:none;}
 [data-testid="collapsedControl"]{display:none;}
 [data-testid="stHeader"]{background:transparent;}
 [data-testid="stAppViewContainer"]{background-color:var(--wa-bg);}
-html.wasend-dark body{background-color:#0c110e;}
+html.wasend-dark body{background-color:#0d0f12;}
 
 /* buttons */
 .stButton>button{border-radius:10px;font-weight:600;background-color:var(--wa-card);
   color:var(--wa-ink);border:1px solid var(--wa-line);transition:all .15s ease;}
-.stButton>button:hover{border-color:var(--wa-green);color:var(--wa-green-dark);}
+.stButton>button:hover{border-color:var(--wa-accent);color:var(--wa-accent-dark);}
 .stButton>button:active{transform:scale(.98);}
-.stButton>button[kind="primary"]{background-color:var(--wa-green);border-color:var(--wa-green);color:#fff;}
-.stButton>button[kind="primary"]:hover{background-color:var(--wa-green-dark);border-color:var(--wa-green-dark);color:#fff;}
+.stButton>button[kind="primary"]{background-color:var(--wa-accent);border-color:var(--wa-accent);color:#fff;}
+.stButton>button[kind="primary"]:hover{background-color:var(--wa-accent-dark);border-color:var(--wa-accent-dark);color:#fff;}
 .stButton>button:disabled{opacity:.55;}
 
 /* inputs */
@@ -255,7 +264,7 @@ html.wasend-dark body{background-color:#0c110e;}
   border-radius:10px;background-color:var(--wa-card);color:var(--wa-ink);border:1px solid var(--wa-line);}
 .stTextInput>div>div>input:focus,.stTextArea>div>div>textarea:focus,.stNumberInput>div>div>input:focus,
 .stDateInput>div>div>input:focus,.stTimeInput>div>div>input:focus{
-  border-color:var(--wa-green);box-shadow:0 0 0 1px var(--wa-green);}
+  border-color:var(--wa-accent);box-shadow:0 0 0 1px var(--wa-accent);}
 div[data-baseweb="select"]>div{background-color:var(--wa-card);border-color:var(--wa-line);border-radius:10px;}
 
 /* metric cards */
@@ -273,11 +282,19 @@ div[data-baseweb="select"]>div{background-color:var(--wa-card);border-color:var(
 [data-testid="stDataFrame"]{border:1px solid var(--wa-line);border-radius:12px;overflow:hidden;}
 
 /* progress */
-.stProgress>div>div>div{background-color:var(--wa-green);}
+.stProgress>div>div>div{background-color:var(--wa-accent);}
+
+/* DarkPan-style stat cards */
+.stat-card{display:flex;align-items:center;gap:14px;background:var(--wa-card);
+  border:1px solid var(--wa-line);border-radius:12px;padding:18px 16px;
+  box-shadow:0 1px 3px rgba(0,0,0,.10);}
+.stat-icon{font-size:36px;line-height:1;flex-shrink:0;}
+.stat-label{font-size:13px;color:var(--wa-muted);margin-bottom:2px;}
+.stat-value{font-size:26px;font-weight:800;color:var(--wa-ink);line-height:1.1;}
 
 /* misc */
 hr{border-color:var(--wa-line);}
-a{color:var(--wa-green-dark);}
+a{color:var(--wa-accent-dark);}
 html.wasend-dark a{color:#8ab4ff;}
 code{border-radius:6px;}
 
@@ -291,7 +308,7 @@ html.wasend-dark div[data-baseweb="select"] span,
 html.wasend-dark table,html.wasend-dark .stDataFrame{color:var(--wa-ink);}
 html.wasend-dark .stRadio label p,html.wasend-dark .stCheckbox label p{color:var(--wa-ink);}
 html.wasend-dark section[data-testid="stSidebar"] .stRadio label p{color:var(--wa-muted);}
-html.wasend-dark section[data-testid="stSidebar"] .stRadio label:has(input:checked) p{color:var(--wa-green);}
+html.wasend-dark section[data-testid="stSidebar"] .stRadio label:has(input:checked) p{color:var(--wa-accent);}
 </style>""",
     unsafe_allow_html=True,
 )
@@ -513,21 +530,51 @@ if page == "dashboard":
     campaigns = run_async(database.get_all_campaigns(view_uid))
     stats = run_async(database.get_send_stats(view_uid))
 
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric(t("dash.metric_contacts", lang), contact_count)
-    col2.metric(t("dash.metric_campaigns", lang), len(campaigns))
-    col3.metric(t("dash.metric_sent", lang), stats.get("sent", 0) + stats.get("delivered", 0))
-    col4.metric(t("dash.metric_failed", lang), stats.get("failed", 0))
+    _s1, _s2, _s3, _s4 = st.columns(4)
+    with _s1:
+        _stat("👥", t("dash.metric_contacts", lang), contact_count)
+    with _s2:
+        _stat("📢", t("dash.metric_campaigns", lang), len(campaigns))
+    with _s3:
+        _stat("📤", t("dash.metric_sent", lang),
+              stats.get("sent", 0) + stats.get("delivered", 0))
+    with _s4:
+        _stat("❌", t("dash.metric_failed", lang), stats.get("failed", 0))
 
     total_out = sum(stats.get(s, 0) for s in ("sent", "delivered", "read", "failed"))
     delivered = stats.get("delivered", 0) + stats.get("read", 0)
     rate = (delivered / total_out * 100) if total_out > 0 else 0
 
-    col5, col6, col7, col8 = st.columns(4)
-    col5.metric(t("dash.metric_delivery_rate", lang), f"{rate:.1f}%")
-    col6.metric(t("dash.metric_delivered", lang), stats.get("delivered", 0))
-    col7.metric(t("dash.metric_read", lang), stats.get("read", 0))
-    col8.metric(t("dash.metric_total", lang), stats.get("total", 0))
+    _s5, _s6, _s7, _s8 = st.columns(4)
+    with _s5:
+        _stat("📈", t("dash.metric_delivery_rate", lang), f"{rate:.1f}%")
+    with _s6:
+        _stat("✅", t("dash.metric_delivered", lang), stats.get("delivered", 0))
+    with _s7:
+        _stat("👁️", t("dash.metric_read", lang), stats.get("read", 0))
+    with _s8:
+        _stat("📊", t("dash.metric_total", lang), stats.get("total", 0))
+
+    st.divider()
+    _daily = run_async(database.get_daily_stats(view_uid, 14))
+    _has_data = bool(_daily) and any(d["sent"] or d["failed"] for d in _daily)
+    if _has_data:
+        _df = pd.DataFrame(_daily)
+        _df["date"] = pd.to_datetime(_df["date"]).dt.strftime("%d/%m")
+        _df = _df.set_index("date")
+    _c1, _c2 = st.columns(2)
+    with _c1:
+        st.subheader(t("dash.chart_daily", lang))
+        if _has_data:
+            st.bar_chart(_df[["sent"]], color="#eb1616")
+        else:
+            st.caption(t("dash.no_chart_data", lang))
+    with _c2:
+        st.subheader(t("dash.chart_status", lang))
+        if _has_data:
+            st.area_chart(_df[["sent", "failed"]], color=["#eb1616", "#8a8f9e"])
+        else:
+            st.caption(t("dash.no_chart_data", lang))
 
     st.divider()
     st.subheader(t("dash.recent_campaigns", lang))
