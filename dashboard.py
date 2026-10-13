@@ -69,18 +69,26 @@ def _process_scheduled(s: dict):
         run_async(database.update_scheduled_status(s["id"], "failed", "user not found"))
         return
     dev = run_async(database.get_default_device(s["user_id"]))
-    device_id = dev["gowa_device_id"] if dev else ""
+    device_id = s.get("device_id") or (dev["gowa_device_id"] if dev else "")
     if not device_id:
         run_async(database.update_scheduled_status(s["id"], "failed", "no device linked"))
         return
+    # Don't double-run a campaign that is already blasting
+    ctrl = sender.get_blast_control(s["campaign_id"]) if s.get("campaign_id") else None
+    if ctrl and ctrl["status"] in ("running", "paused"):
+        logger.info("Scheduler: campaign %s already running, skipping", s["campaign_id"])
+        return
     try:
         if s.get("campaign_id"):
+            campaign = run_async(database.get_campaign(s["campaign_id"])) or {}
             result = run_async(sender.send_campaign(
                 user_id=s["user_id"],
                 campaign_id=s["campaign_id"],
                 delay_min=s.get("delay_min") or config.GOWA_DELAY_MIN_SECONDS,
                 delay_max=s.get("delay_max") or config.GOWA_DELAY_MAX_SECONDS,
                 device_id=device_id,
+                max_duration_min=campaign.get("max_duration_min") or 0,
+                max_messages=campaign.get("max_messages") or 0,
             ))
             err = "" if result["failed"] == 0 else f"{result['failed']} failed"
             run_async(database.update_scheduled_status(
@@ -299,6 +307,22 @@ def _need_device() -> bool:
     return False
 
 
+def _run_blast_thread(uid, campaign_id, variants, delay_min, delay_max,
+                      device_id, max_dur, max_msg):
+    """Background blast runner (daemon thread). Progress via blast control."""
+    try:
+        run_async(sender.send_campaign(
+            user_id=uid, campaign_id=campaign_id, variants=variants,
+            delay_min=delay_min, delay_max=delay_max, device_id=device_id,
+            max_duration_min=max_dur, max_messages=max_msg,
+        ))
+    except Exception as e:
+        logger.error("Blast thread failed: %s", e)
+        ctrl = sender.get_blast_control(campaign_id)
+        ctrl["status"] = "error"
+        ctrl["stop_reason"] = str(e)[:200]
+
+
 # -- Dashboard Page --------------------------------------------
 
 if page == "dashboard":
@@ -405,6 +429,23 @@ elif page == "send":
     contacts = run_async(database.get_contacts_for_campaign(campaign_id))
     st.info(t("dash.contacts_in_this_campaign", lang).format(n=len(contacts)))
 
+    # --- Device picker (when user has more than one device) ---
+    _devs = run_async(database.get_user_devices(uid))
+    send_device_id = device_id
+    if len(_devs) > 1:
+        _dopts = {}
+        for _d in _devs:
+            _lbl = (_d["device_name"] or _d["gowa_device_id"])
+            if _d["is_default"]:
+                _lbl = "\u2b50 " + _lbl
+            _dopts[_lbl] = _d["gowa_device_id"]
+        _def_lbl = next((k for k, v in _dopts.items() if v == device_id),
+                        list(_dopts.keys())[0])
+        _sel_lbl = st.selectbox(t("send.device_label", lang),
+                                list(_dopts.keys()),
+                                index=list(_dopts.keys()).index(_def_lbl))
+        send_device_id = _dopts[_sel_lbl]
+
     # --- Message variants ---
     st.subheader(t("send.variants_label", lang))
     if "variant_count" not in st.session_state:
@@ -445,6 +486,17 @@ elif page == "send":
     if delay_max < delay_min:
         delay_max = delay_min
 
+    # --- Blast limits (optional) ---
+    st.subheader(t("send.limits_label", lang))
+    lcol1, lcol2 = st.columns(2)
+    _camp_row = next((c for c in campaigns if c["id"] == campaign_id), {})
+    limit_minutes = lcol1.number_input(
+        t("send.limit_minutes", lang), min_value=0.0, step=15.0,
+        value=float(_camp_row.get("max_duration_min") or 0))
+    limit_messages = lcol2.number_input(
+        t("send.limit_messages", lang), min_value=0, step=10,
+        value=int(_camp_row.get("max_messages") or 0))
+
     # --- Send now or schedule ---
     schedule_it = st.checkbox(t("send.schedule_toggle", lang))
     sched_dt = None
@@ -454,8 +506,14 @@ elif page == "send":
         stime = scol2.time_input("", value=(datetime.now() + timedelta(hours=1)).time())
         sched_dt = datetime.combine(sdate, stime)
 
+    _ctrl = sender.get_blast_control(campaign_id)
+    _blast_active = _ctrl["status"] in ("running", "paused")
+
     btn_label = t("sched.schedule_btn", lang) if schedule_it else t("dash.send_btn", lang)
-    if st.button(btn_label, type="primary", disabled=not variants_input or not contacts):
+    if st.button(btn_label, type="primary",
+                 disabled=(not variants_input or not contacts or _blast_active)):
+        # persist limits on the campaign first
+        run_async(database.update_campaign_limits(campaign_id, limit_minutes, int(limit_messages)))
         if schedule_it:
             if sched_dt <= datetime.now():
                 st.error(t("sched.past", lang))
@@ -469,8 +527,8 @@ elif page == "send":
                     uid, sched_dt.strftime("%Y-%m-%d %H:%M:%S"),
                     campaign_id=campaign_id,
                     content="", phone="",
-                    delay_min=delay_min, delay_max=delay_max))
-                # store delay on the schedule row
+                    delay_min=delay_min, delay_max=delay_max,
+                    device_id=send_device_id))
                 st.success(t("sched.scheduled", lang).format(t=sched_dt.strftime("%d %b %Y %H:%M")))
         else:
             # save variants
@@ -480,19 +538,55 @@ elif page == "send":
             for b in variants_input:
                 vid = run_async(database.create_variant(uid, b, campaign_id))
                 db_variants.append({"id": vid, "body": b, "weight": 1})
-            progress = st.progress(0)
-            status_text = st.empty()
+            sender.reset_blast_control(campaign_id)
+            th = threading.Thread(
+                target=_run_blast_thread,
+                args=(uid, campaign_id, db_variants, delay_min, delay_max,
+                      send_device_id, limit_minutes, int(limit_messages)),
+                daemon=True,
+            )
+            th.start()
+            st.rerun()
 
-            def _on_progress(i, total, phone):
-                progress.progress(i / total)
-                status_text.text(t("dash.sending_progress", lang).format(i=i, total=total, s="", f=""))
-
-            result = run_async(sender.send_campaign(
-                user_id=uid, campaign_id=campaign_id, variants=db_variants,
-                delay_min=delay_min, delay_max=delay_max, device_id=device_id,
-                on_progress=_on_progress,
-            ))
-            st.success(t("dash.done_sent_failed", lang).format(s=result["sent"], f=result["failed"]))
+    # --- Blast progress + play/pause/stop ---
+    _ctrl = sender.get_blast_control(campaign_id)
+    _st = _ctrl["status"]
+    if _st in ("running", "paused"):
+        st.divider()
+        st.subheader(t("blast.progress_title", lang))
+        _total = max(1, _ctrl["total"])
+        _done = _ctrl["sent"] + _ctrl["failed"]
+        st.progress(min(1.0, _done / _total))
+        st.text(t("blast.progress_text", lang).format(
+            s=_ctrl["sent"], f=_ctrl["failed"], total=_ctrl["total"],
+            status=t("blast.st_" + _st, lang)))
+        pcol1, pcol2, pcol3 = st.columns(3)
+        if _st == "running":
+            if pcol1.button(t("blast.pause", lang)):
+                _ctrl["pause"].set()
+                st.rerun()
+        else:
+            if pcol1.button(t("blast.resume", lang)):
+                _ctrl["pause"].clear()
+                st.rerun()
+        if pcol2.button(t("blast.stop", lang)):
+            _ctrl["stop"].set()
+            _ctrl["pause"].clear()
+            st.rerun()
+        if pcol3.button(t("blast.refresh", lang)):
+            st.rerun()
+        if _st == "running":
+            time.sleep(2)
+            st.rerun()
+    elif _st in ("done", "stopped", "error") and _ctrl["total"]:
+        st.divider()
+        _reason = _ctrl.get("stop_reason") or ""
+        _rsuffix = ""
+        if _reason in ("manual", "limit_time", "limit_messages"):
+            _rsuffix = " (" + t("blast.reason_" + _reason, lang) + ")"
+        st.info(t("blast.finished", lang).format(
+            s=_ctrl["sent"], f=_ctrl["failed"],
+            status=t("blast.st_" + _st, lang)) + _rsuffix)
 
 
 # -- Schedule Page ---------------------------------------------
@@ -542,6 +636,27 @@ elif page == "schedule":
 
 elif page == "contacts":
     st.title(t("dash.contacts_title", lang))
+
+    with st.expander(t("contacts.add_title", lang)):
+        ac1, ac2 = st.columns(2)
+        afn = ac1.text_input(t("contacts.first_name", lang), key="add_fn")
+        aln = ac2.text_input(t("contacts.last_name", lang), key="add_ln")
+        ac3, ac4 = st.columns(2)
+        aph = ac3.text_input(t("contacts.phone", lang), placeholder=t("dash.phone_ph", lang),
+                             key="add_ph")
+        aem = ac4.text_input(t("contacts.email", lang), key="add_em")
+        if st.button(t("contacts.save", lang), type="primary", key="add_save"):
+            if not aph.strip():
+                st.error(t("contacts.phone_required", lang))
+            else:
+                cid = run_async(database.upsert_contact(
+                    afn.strip(), aln.strip(), aph.strip(), aem.strip(), view_uid))
+                if cid:
+                    st.success(t("contacts.saved", lang))
+                    st.rerun()
+                else:
+                    st.error(t("contacts.save_failed", lang))
+
     contacts = run_async(database.get_all_contacts(view_uid))
     if not contacts:
         st.info(t("dash.no_contacts_import_csv", lang))
@@ -550,6 +665,35 @@ elif page == "contacts":
         df = pd.DataFrame(contacts)
         display_cols = [c for c in ["phone", "first_name", "last_name", "email", "created_at"] if c in df.columns]
         st.dataframe(df[display_cols], use_container_width=True)
+
+        with st.expander(t("contacts.edit_title", lang)):
+            _copts = {f"{c['phone']} — {c.get('first_name') or ''} {c.get('last_name') or ''}".strip(): c
+                      for c in contacts}
+            _csel = st.selectbox(t("contacts.choose", lang), list(_copts.keys()))
+            _c = _copts[_csel]
+            ec1, ec2 = st.columns(2)
+            efn = ec1.text_input(t("contacts.first_name", lang), value=_c.get("first_name") or "",
+                                 key="edit_fn")
+            eln = ec2.text_input(t("contacts.last_name", lang), value=_c.get("last_name") or "",
+                                 key="edit_ln")
+            ec3, ec4 = st.columns(2)
+            eph = ec3.text_input(t("contacts.phone", lang), value=_c.get("phone") or "",
+                                 key="edit_ph")
+            eem = ec4.text_input(t("contacts.email", lang), value=_c.get("email") or "",
+                                 key="edit_em")
+            bcol1, bcol2 = st.columns(2)
+            if bcol1.button(t("contacts.save", lang), type="primary", key="edit_save"):
+                ok = run_async(database.update_contact(
+                    _c["id"], view_uid, efn.strip(), eln.strip(), eph.strip(), eem.strip()))
+                if ok:
+                    st.success(t("contacts.saved", lang))
+                    st.rerun()
+                else:
+                    st.error(t("contacts.phone_conflict", lang))
+            if bcol2.button(t("contacts.delete", lang), key="edit_del"):
+                run_async(database.delete_contact(_c["id"], view_uid))
+                st.success(t("contacts.deleted", lang))
+                st.rerun()
 
 
 # -- Statistics Page -------------------------------------------

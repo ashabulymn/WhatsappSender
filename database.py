@@ -660,6 +660,60 @@ async def update_campaign_status(campaign_id: int, status: str) -> None:
         await db.close()
 
 
+async def update_campaign_limits(campaign_id: int, max_duration_min: float,
+                                 max_messages: int) -> None:
+    """Save blast limits on a campaign (0 = unlimited)."""
+    db = await _connect()
+    try:
+        await db.execute(
+            "UPDATE campaigns SET max_duration_min = ?, max_messages = ? WHERE id = ?",
+            (max(0, max_duration_min or 0), max(0, int(max_messages or 0)), campaign_id),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def update_contact(contact_id: int, user_id: int | None, first_name: str,
+                         last_name: str, phone: str, email: str = "") -> bool:
+    """Update a contact. Returns False if the phone clashes with another contact."""
+    db = await _connect()
+    try:
+        where, params = _user_filter(user_id)
+        conj = "AND" if where else "WHERE"
+        cursor = await db.execute(
+            f"SELECT id FROM contacts {where} {conj} phone = ? AND id != ?",
+            (*params, phone, contact_id),
+        )
+        if await cursor.fetchone():
+            return False
+        cursor = await db.execute(
+            f"""UPDATE contacts SET first_name = ?, last_name = ?, phone = ?, email = ?
+                {where} {conj} id = ?""",
+            (first_name or "Contact", last_name or "", phone, email or "",
+             *params, contact_id),
+        )
+        await db.commit()
+        return cursor.rowcount > 0
+    finally:
+        await db.close()
+
+
+async def delete_contact(contact_id: int, user_id: int | None) -> None:
+    db = await _connect()
+    try:
+        where, params = _user_filter(user_id)
+        cursor = await db.execute(f"SELECT id FROM contacts {where}", params)
+        ids = {row[0] for row in await cursor.fetchall()}
+        if contact_id not in ids:
+            return
+        await db.execute("DELETE FROM campaign_contacts WHERE contact_id = ?", (contact_id,))
+        await db.execute("DELETE FROM contacts WHERE id = ?", (contact_id,))
+        await db.commit()
+    finally:
+        await db.close()
+
+
 async def update_campaign_message(campaign_id: int, message: str) -> None:
     """Save the actual message sent for audit trail."""
     db = await _connect()
@@ -949,9 +1003,14 @@ async def _ensure_extra_tables(db: aiosqlite.Connection):
     if "variant_id" not in cols:
         await db.execute("ALTER TABLE message_log ADD COLUMN variant_id INTEGER")
     cols = await _table_columns(db, "scheduled_messages")
-    for col, ddl in (("delay_min", "REAL DEFAULT 15"), ("delay_max", "REAL DEFAULT 30")):
+    for col, ddl in (("delay_min", "REAL DEFAULT 15"), ("delay_max", "REAL DEFAULT 30"),
+                     ("device_id", "TEXT DEFAULT ''")):
         if col not in cols:
             await db.execute(f"ALTER TABLE scheduled_messages ADD COLUMN {col} {ddl}")
+    cols = await _table_columns(db, "campaigns")
+    for col, ddl in (("max_duration_min", "REAL DEFAULT 0"), ("max_messages", "INTEGER DEFAULT 0")):
+        if col not in cols:
+            await db.execute(f"ALTER TABLE campaigns ADD COLUMN {col} {ddl}")
     await db.commit()
 
 
@@ -1002,16 +1061,17 @@ async def delete_variant(variant_id: int, user_id: int) -> None:
 
 async def schedule_message(user_id: int, scheduled_at: str, content: str = "",
                            phone: str = "", campaign_id: int | None = None,
-                           delay_min: float = 15, delay_max: float = 30) -> int:
+                           delay_min: float = 15, delay_max: float = 30,
+                           device_id: str = "") -> int:
     """Schedule a one-shot message or a full campaign. scheduled_at: ISO datetime."""
     db = await _connect()
     try:
         await _ensure_extra_tables(db)
         cursor = await db.execute(
             """INSERT INTO scheduled_messages
-               (user_id, campaign_id, phone, content, scheduled_at, delay_min, delay_max)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (user_id, campaign_id, phone, content, scheduled_at, delay_min, delay_max),
+               (user_id, campaign_id, phone, content, scheduled_at, delay_min, delay_max, device_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (user_id, campaign_id, phone, content, scheduled_at, delay_min, delay_max, device_id or ""),
         )
         await db.commit()
         return cursor.lastrowid or 0

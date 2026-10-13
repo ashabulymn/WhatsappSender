@@ -14,6 +14,8 @@ import asyncio
 import logging
 import random
 import re
+import threading
+import time
 from typing import Callable
 
 import config
@@ -24,6 +26,56 @@ logger = logging.getLogger(__name__)
 
 _SPINTAX_RE = re.compile(r"\{([^{}]*\|[^{}]*)\}")
 _SLOT_RE = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
+
+# -- Blast play/pause/stop controls ------------------------------
+# Per-campaign control registry, shared between the dashboard UI thread
+# and the background blast thread (or the scheduler thread).
+
+_BLAST_CONTROLS: dict[int, dict] = {}
+_BLAST_LOCK = threading.Lock()
+
+
+def get_blast_control(campaign_id: int) -> dict:
+    """Return (creating if needed) the play/pause/stop control for a campaign."""
+    with _BLAST_LOCK:
+        return _BLAST_CONTROLS.setdefault(campaign_id, {
+            "pause": threading.Event(),
+            "stop": threading.Event(),
+            "sent": 0,
+            "failed": 0,
+            "total": 0,
+            "status": "idle",  # idle|running|paused|stopped|done|error
+            "stop_reason": "",
+            "started_at": 0.0,
+        })
+
+
+def reset_blast_control(campaign_id: int) -> dict:
+    with _BLAST_LOCK:
+        ctrl = _BLAST_CONTROLS.get(campaign_id)
+        if ctrl:
+            ctrl["pause"].clear()
+            ctrl["stop"].clear()
+            ctrl.update(sent=0, failed=0, total=0, status="idle",
+                        stop_reason="", started_at=0.0)
+            return ctrl
+        return get_blast_control(campaign_id)
+
+
+async def _interruptible_sleep(delay: float, ctrl: dict) -> str:
+    """Sleep in small chunks; returns 'stopped' if stop was requested."""
+    end = time.time() + delay
+    while time.time() < end:
+        if ctrl["stop"].is_set():
+            return "stopped"
+        while ctrl["pause"].is_set():
+            ctrl["status"] = "paused"
+            await asyncio.sleep(1)
+            if ctrl["stop"].is_set():
+                return "stopped"
+        ctrl["status"] = "running"
+        await asyncio.sleep(min(1.0, max(0.1, end - time.time())))
+    return "ok"
 
 
 def render_spintax(text: str, rng: random.Random | None = None) -> str:
@@ -79,6 +131,8 @@ async def send_campaign(
     delay_max: float | None = None,
     device_id: str = "",
     on_progress: Callable[[int, int, str], None] | None = None,
+    max_duration_min: float | None = None,
+    max_messages: int | None = None,
 ) -> dict:
     """
     Send a campaign with anti-ban safeguards.
@@ -86,29 +140,73 @@ async def send_campaign(
     - Each recipient receives exactly ONE randomly picked variant (weighted).
     - Random delay uniform(delay_min, delay_max) between messages.
     - Every send is logged with variant_id for audit.
+    - Play/pause/stop via get_blast_control(campaign_id).
+    - Optional limits: max_duration_min (0 = unlimited), max_messages (0 = unlimited).
+      None values fall back to the campaign row.
     """
     delay_min = config.GOWA_DELAY_MIN_SECONDS if delay_min is None else max(0.5, delay_min)
     delay_max = config.GOWA_DELAY_MAX_SECONDS if delay_max is None else max(delay_min, delay_max)
     if variants is None:
         variants = await database.get_variants(user_id, campaign_id)
+    campaign = await database.get_campaign(campaign_id) or {}
+    if max_duration_min is None:
+        max_duration_min = campaign.get("max_duration_min") or 0
+    if max_messages is None:
+        max_messages = campaign.get("max_messages") or 0
 
     contacts = await database.get_contacts_for_campaign(campaign_id)
     total = len(contacts)
+    results = {"sent": 0, "failed": 0, "total": total, "results": [],
+               "stopped_early": False, "stop_reason": ""}
     if not total:
-        return {"sent": 0, "failed": 0, "total": 0, "results": []}
+        return results
+
+    ctrl = get_blast_control(campaign_id)
+    if ctrl["status"] in ("running", "paused"):
+        results["stopped_early"] = True
+        results["stop_reason"] = "already_running"
+        return results
+    ctrl["pause"].clear()
+    ctrl["stop"].clear()
+    ctrl.update(status="running", sent=0, failed=0, total=total,
+                stop_reason="", started_at=time.time())
+    start_ts = time.time()
 
     wa = WhatsAppClient(device_id=device_id)
     rng = random.Random()
-    results = {"sent": 0, "failed": 0, "total": total, "results": []}
 
     for i, contact in enumerate(contacts):
+        if ctrl["stop"].is_set():
+            results["stopped_early"] = True
+            results["stop_reason"] = "manual"
+            break
+        while ctrl["pause"].is_set():
+            ctrl["status"] = "paused"
+            await asyncio.sleep(1)
+            if ctrl["stop"].is_set():
+                break
+        if ctrl["stop"].is_set():
+            results["stopped_early"] = True
+            results["stop_reason"] = "manual"
+            break
+        ctrl["status"] = "running"
+
+        # Limit checks (before sending)
+        if max_messages and results["sent"] >= max_messages:
+            results["stopped_early"] = True
+            results["stop_reason"] = "limit_messages"
+            break
+        if max_duration_min and (time.time() - start_ts) > max_duration_min * 60:
+            results["stopped_early"] = True
+            results["stop_reason"] = "limit_time"
+            break
+
         phone = contact.get("phone") or ""
         variant = pick_variant(variants, rng)
         if variant:
             body = render_message(variant["body"], contact, rng)
             variant_id = variant["id"]
         else:
-            campaign = await database.get_campaign(campaign_id)
             body = render_message(campaign.get("message") or "", contact, rng)
             variant_id = None
 
@@ -128,6 +226,8 @@ async def send_campaign(
             results["sent"] += 1
         else:
             results["failed"] += 1
+        ctrl["sent"] = results["sent"]
+        ctrl["failed"] = results["failed"]
         results["results"].append({"phone": phone, **result})
 
         if on_progress:
@@ -139,9 +239,18 @@ async def send_campaign(
         if i < total - 1:
             delay = rng.uniform(delay_min, delay_max)
             logger.info(f"Anti-ban delay {delay:.1f}s before next message ({i+1}/{total})")
-            await asyncio.sleep(delay)
+            if await _interruptible_sleep(delay, ctrl) == "stopped":
+                results["stopped_early"] = True
+                results["stop_reason"] = "manual"
+                break
 
-    await database.update_campaign_status(campaign_id, "sent")
+    if results["stopped_early"]:
+        ctrl["status"] = "stopped"
+        ctrl["stop_reason"] = results["stop_reason"]
+        await database.update_campaign_status(campaign_id, "stopped")
+    else:
+        ctrl["status"] = "done"
+        await database.update_campaign_status(campaign_id, "sent")
     return results
 
 
