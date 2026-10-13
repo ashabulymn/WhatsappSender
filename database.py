@@ -1040,9 +1040,20 @@ async def _ensure_extra_tables(db: aiosqlite.Connection):
         await db.execute("ALTER TABLE message_log ADD COLUMN variant_id INTEGER")
     cols = await _table_columns(db, "scheduled_messages")
     for col, ddl in (("delay_min", "REAL DEFAULT 15"), ("delay_max", "REAL DEFAULT 30"),
-                     ("device_id", "TEXT DEFAULT ''")):
+                     ("device_id", "TEXT DEFAULT ''"),
+                     ("recurrence", "TEXT DEFAULT 'once'")):
         if col not in cols:
             await db.execute(f"ALTER TABLE scheduled_messages ADD COLUMN {col} {ddl}")
+    # blocklist table (opt-out numbers, per user)
+    await db.execute(
+        """CREATE TABLE IF NOT EXISTS blocked_numbers (
+               id INTEGER PRIMARY KEY AUTOINCREMENT,
+               user_id INTEGER NOT NULL,
+               phone TEXT NOT NULL,
+               reason TEXT DEFAULT '',
+               created_at TEXT DEFAULT (datetime('now')),
+               UNIQUE(user_id, phone))""")
+    await db.commit()
     cols = await _table_columns(db, "campaigns")
     for col, ddl in (("max_duration_min", "REAL DEFAULT 0"), ("max_messages", "INTEGER DEFAULT 0")):
         if col not in cols:
@@ -1098,16 +1109,18 @@ async def delete_variant(variant_id: int, user_id: int) -> None:
 async def schedule_message(user_id: int, scheduled_at: str, content: str = "",
                            phone: str = "", campaign_id: int | None = None,
                            delay_min: float = 15, delay_max: float = 30,
-                           device_id: str = "") -> int:
-    """Schedule a one-shot message or a full campaign. scheduled_at: ISO datetime."""
+                           device_id: str = "", recurrence: str = "once") -> int:
+    """Schedule a one-shot message or a full campaign. scheduled_at: ISO datetime.
+    recurrence: 'once' | 'daily' | 'weekly'."""
     db = await _connect()
     try:
         await _ensure_extra_tables(db)
         cursor = await db.execute(
             """INSERT INTO scheduled_messages
-               (user_id, campaign_id, phone, content, scheduled_at, delay_min, delay_max, device_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (user_id, campaign_id, phone, content, scheduled_at, delay_min, delay_max, device_id or ""),
+               (user_id, campaign_id, phone, content, scheduled_at, delay_min, delay_max, device_id, recurrence)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (user_id, campaign_id, phone, content, scheduled_at, delay_min, delay_max,
+             device_id or "", recurrence),
         )
         await db.commit()
         return cursor.lastrowid or 0
@@ -1157,6 +1170,81 @@ async def update_scheduled_status(sched_id: int, status: str, error: str = "") -
         await db.commit()
     finally:
         await db.close()
+
+
+async def reschedule_next(sched_id: int, next_at: str) -> None:
+    """Roll a recurring schedule forward: reset to pending at next_at."""
+    db = await _connect()
+    try:
+        await db.execute(
+            """UPDATE scheduled_messages
+               SET scheduled_at = ?, status = 'pending', attempts = 0, error_message = ''
+               WHERE id = ?""",
+            (next_at, sched_id))
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def get_failed_phones(user_id: int | None, campaign_id: int) -> list[dict]:
+    """Distinct phones with failed status for a campaign (for retry)."""
+    db = await _connect()
+    try:
+        where, params = _user_filter(user_id)
+        q = """SELECT DISTINCT phone FROM message_log
+               WHERE campaign_id = ? AND status = 'failed'"""
+        if where:
+            q += " AND " + where.replace("WHERE ", "", 1)
+        cur = await db.execute(q, (campaign_id, *params))
+        return [{"phone": r[0]} for r in await cur.fetchall()]
+    finally:
+        await db.close()
+
+
+async def add_blocked(user_id: int, phone: str, reason: str = "") -> bool:
+    """Add a phone to the user's blocklist. Returns False if already blocked."""
+    db = await _connect()
+    try:
+        await _ensure_extra_tables(db)
+        try:
+            await db.execute(
+                "INSERT INTO blocked_numbers (user_id, phone, reason) VALUES (?, ?, ?)",
+                (user_id, phone, reason))
+            await db.commit()
+            return True
+        except Exception:
+            return False
+    finally:
+        await db.close()
+
+
+async def remove_blocked(user_id: int, phone: str) -> None:
+    db = await _connect()
+    try:
+        await db.execute(
+            "DELETE FROM blocked_numbers WHERE user_id = ? AND phone = ?",
+            (user_id, phone))
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def list_blocked(user_id: int) -> list[dict]:
+    db = await _connect()
+    try:
+        await _ensure_extra_tables(db)
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT * FROM blocked_numbers WHERE user_id = ? ORDER BY created_at DESC",
+            (user_id,))
+        return [dict(r) for r in await cur.fetchall()]
+    finally:
+        await db.close()
+
+
+async def get_blocked_phones(user_id: int) -> set[str]:
+    rows = await list_blocked(user_id)
+    return {r["phone"] for r in rows}
 
 
 async def cancel_scheduled(sched_id: int, user_id: int | None = None) -> None:

@@ -9,8 +9,11 @@ Wasend — Streamlit Web Dashboard (multi-user).
 """
 
 import asyncio
+import difflib
+import html
 import logging
 import os
+import random
 import threading
 import time
 from datetime import datetime, timedelta
@@ -105,6 +108,15 @@ def _process_scheduled(s: dict):
             err = "" if result["failed"] == 0 else f"{result['failed']} failed"
             run_async(database.update_scheduled_status(
                 s["id"], "sent" if result["failed"] == 0 else "failed", err))
+            # recurring: roll forward instead of finishing
+            if (s.get("recurrence") or "once") != "once":
+                _days = 7 if s["recurrence"] == "weekly" else 1
+                try:
+                    _orig = datetime.strptime(s["scheduled_at"][:19], "%Y-%m-%d %H:%M:%S")
+                except Exception:
+                    _orig = datetime.now()
+                _next = (_orig + timedelta(days=_days)).strftime("%Y-%m-%d %H:%M:%S")
+                run_async(database.reschedule_next(s["id"], _next))
         else:
             result = run_async(sender.send_single(
                 user_id=s["user_id"], phone=s["phone"], content=s["content"],
@@ -312,6 +324,12 @@ div[data-baseweb="select"]>div{background-color:var(--wa-card);border-color:var(
 .stat-icon{font-size:36px;line-height:1;flex-shrink:0;}
 .stat-label{font-size:13px;color:var(--wa-muted);margin-bottom:2px;}
 .stat-value{font-size:26px;font-weight:800;color:var(--wa-ink);line-height:1.1;}
+
+/* message preview bubbles */
+.preview-bubble{background:var(--wa-accent-soft);border:1px solid var(--wa-line);
+  border-radius:12px;padding:10px 14px;margin:8px 0;white-space:pre-wrap;
+  color:var(--wa-ink);}
+.preview-bubble .preview-to{font-size:12px;color:var(--wa-muted);margin-bottom:4px;}
 
 /* responsive: stack columns vertically on small screens */
 @media (max-width: 640px){
@@ -522,13 +540,14 @@ def _need_device() -> bool:
 
 
 def _run_blast_thread(uid, campaign_id, variants, delay_min, delay_max,
-                      device_id, max_dur, max_msg):
+                      device_id, max_dur, max_msg, only_phones=None):
     """Background blast runner (daemon thread). Progress via blast control."""
     try:
         run_async(sender.send_campaign(
             user_id=uid, campaign_id=campaign_id, variants=variants,
             delay_min=delay_min, delay_max=delay_max, device_id=device_id,
             max_duration_min=max_dur, max_messages=max_msg,
+            only_phones=only_phones,
         ))
     except Exception as e:
         logger.error("Blast thread failed: %s", e)
@@ -709,10 +728,36 @@ elif page == "send":
         st.session_state.variant_count += 1
         st.rerun()
 
-    if st.button(t("send.preview_random", lang)) and variants_input and contacts:
-        sample = contacts[0]
-        v = sender.pick_variant([{"body": b, "weight": 1} for b in variants_input])
-        st.text(sender.render_message(v["body"], sample))
+    # --- Variant quality warnings (anti-ban) ---
+    if variants_input:
+        if len(variants_input) < 3:
+            st.warning(t("send.warn_few_variants", lang))
+        _too_similar = False
+        for _i in range(len(variants_input)):
+            for _j in range(_i + 1, len(variants_input)):
+                if difflib.SequenceMatcher(
+                        None, variants_input[_i], variants_input[_j]).ratio() > 0.8:
+                    _too_similar = True
+                    break
+            if _too_similar:
+                break
+        if _too_similar:
+            st.warning(t("send.warn_similar_variants", lang))
+
+    # --- Preview: rendered samples in chat bubbles ---
+    if st.button(t("send.preview_btn", lang),
+                 disabled=not (variants_input and contacts)):
+        _rng = random.Random()
+        _pool = [{"body": b, "weight": 1} for b in variants_input]
+        for _k in range(min(3, len(variants_input))):
+            _v = sender.pick_variant(_pool, _rng)
+            _c = contacts[_k % len(contacts)]
+            _msg = html.escape(sender.render_message(_v["body"], _c, _rng))
+            _nm = html.escape(_c.get("first_name") or _c.get("phone", ""))
+            st.markdown(
+                f"<div class='preview-bubble'><div class='preview-to'>➤ {_nm}</div>"
+                f"{_msg}</div>",
+                unsafe_allow_html=True)
 
     # --- Random delay range + blast limits ---
     st.subheader(t("send.step3", lang))
@@ -742,6 +787,11 @@ elif page == "send":
         sdate = scol1.date_input(t("sched.datetime", lang), value=datetime.now().date())
         stime = scol2.time_input("", value=(datetime.now() + timedelta(hours=1)).time())
         sched_dt = datetime.combine(sdate, stime)
+        _rec_opts = [t("sched.rec_once", lang), t("sched.rec_daily", lang),
+                     t("sched.rec_weekly", lang)]
+        _rec_sel = st.selectbox(t("sched.recurrence", lang), _rec_opts)
+        _recurrence = ("daily" if _rec_sel == _rec_opts[1]
+                       else "weekly" if _rec_sel == _rec_opts[2] else "once")
 
     _ctrl = sender.get_blast_control(campaign_id)
     _blast_active = _ctrl["status"] in ("running", "paused")
@@ -765,7 +815,7 @@ elif page == "send":
                     campaign_id=campaign_id,
                     content="", phone="",
                     delay_min=delay_min, delay_max=delay_max,
-                    device_id=send_device_id))
+                    device_id=send_device_id, recurrence=_recurrence))
                 st.success(t("sched.scheduled", lang).format(t=sched_dt.strftime("%d %b %Y %H:%M")))
         else:
             # save variants
@@ -825,6 +875,30 @@ elif page == "send":
             s=_ctrl["sent"], f=_ctrl["failed"],
             status=t("blast.st_" + _st, lang)) + _rsuffix)
 
+    # --- Retry failed ---
+    _failed = run_async(database.get_failed_phones(uid, campaign_id))
+    # only retry numbers still in this campaign
+    _camp_phones = {c.get("phone") for c in contacts}
+    _failed = [f for f in _failed if f["phone"] in _camp_phones]
+    if _failed:
+        st.divider()
+        st.subheader(t("send.retry_title", lang))
+        st.caption(t("send.retry_desc", lang).format(n=len(_failed)))
+        if st.button(t("send.retry_btn", lang), type="secondary",
+                     disabled=_blast_active):
+            sender.reset_blast_control(campaign_id)
+            _rvariants = [{"id": 0, "body": b, "weight": 1} for b in variants_input] \
+                or run_async(database.get_variants(uid, campaign_id))
+            th = threading.Thread(
+                target=_run_blast_thread,
+                args=(uid, campaign_id, _rvariants, delay_min, delay_max,
+                      send_device_id, limit_minutes, int(limit_messages),
+                      [f["phone"] for f in _failed]),
+                daemon=True,
+            )
+            th.start()
+            st.rerun()
+
 
 # -- Schedule Page ---------------------------------------------
 
@@ -859,8 +933,11 @@ elif page == "schedule":
     else:
         for s in items:
             desc = s["content"][:60] or f"{t('sched.campaign', lang)} #{s['campaign_id']}"
+            _rec = (s.get("recurrence") or "once")
+            _rec_lbl = {"daily": "🔁 " + t("sched.rec_daily", lang),
+                        "weekly": "🔁 " + t("sched.rec_weekly", lang)}.get(_rec, "")
             cols = st.columns([3, 2, 2, 1])
-            cols[0].text(f"{s['phone'] or ''} {desc}")
+            cols[0].text(f"{s['phone'] or ''} {desc} {_rec_lbl}")
             cols[1].text(s["scheduled_at"])
             cols[2].text(s["status"])
             if cols[3].button(t("sched.cancel", lang), key=f"cancel_{s['id']}"):
@@ -931,6 +1008,33 @@ elif page == "contacts":
                 run_async(database.delete_contact(_c["id"], view_uid))
                 st.success(t("contacts.deleted", lang))
                 st.rerun()
+
+    # --- Blocklist (opt-out) ---
+    st.divider()
+    st.subheader(t("block.title", lang))
+    st.caption(t("block.desc", lang))
+    _b1, _b2 = st.columns([3, 1])
+    _bphone = _b1.text_input(t("block.phone", lang), key="block_phone",
+                             placeholder=t("dash.phone_ph", lang))
+    if _b2.button(t("block.add", lang), key="block_add"):
+        _norm = csv_handler.normalize_phone(_bphone.strip()) if _bphone.strip() else None
+        if not _norm:
+            st.error(t("contacts.phone_required", lang))
+        elif run_async(database.add_blocked(uid, _norm)):
+            st.success(t("block.added", lang))
+            st.rerun()
+        else:
+            st.info(t("block.already", lang))
+    _blocked = run_async(database.list_blocked(uid))
+    if _blocked:
+        for _b in _blocked:
+            _bc1, _bc2 = st.columns([4, 1])
+            _bc1.text(f"🚫 {_b['phone']}")
+            if _bc2.button(t("block.remove", lang), key=f"unblock_{_b['id']}"):
+                run_async(database.remove_blocked(uid, _b["phone"]))
+                st.rerun()
+    else:
+        st.caption(t("block.empty", lang))
 
 
 # -- Statistics Page -------------------------------------------

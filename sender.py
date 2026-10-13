@@ -133,6 +133,7 @@ async def send_campaign(
     on_progress: Callable[[int, int, str], None] | None = None,
     max_duration_min: float | None = None,
     max_messages: int | None = None,
+    only_phones: list[str] | None = None,
 ) -> dict:
     """
     Send a campaign with anti-ban safeguards.
@@ -155,6 +156,17 @@ async def send_campaign(
         max_messages = campaign.get("max_messages") or 0
 
     contacts = await database.get_contacts_for_campaign(campaign_id)
+    # retry subset
+    if only_phones is not None:
+        _want = set(only_phones)
+        contacts = [c for c in contacts if c.get("phone") in _want]
+    # blocklist (opt-out) — never send to blocked numbers
+    try:
+        _blocked = await database.get_blocked_phones(user_id)
+    except Exception:
+        _blocked = set()
+    if _blocked:
+        contacts = [c for c in contacts if c.get("phone") not in _blocked]
     total = len(contacts)
     results = {"sent": 0, "failed": 0, "total": total, "results": [],
                "stopped_early": False, "stop_reason": ""}
