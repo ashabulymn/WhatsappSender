@@ -1196,6 +1196,20 @@ async def _ensure_extra_tables(db: aiosqlite.Connection):
                user_id INTEGER NOT NULL,
                created_at TEXT DEFAULT (datetime('now')),
                expires_at TEXT NOT NULL)""")
+    # incoming replies captured via GoWA webhook
+    await db.execute(
+        """CREATE TABLE IF NOT EXISTS incoming_replies (
+               id INTEGER PRIMARY KEY AUTOINCREMENT,
+               user_id INTEGER NOT NULL,
+               device_id TEXT DEFAULT '',
+               phone TEXT NOT NULL,
+               message_text TEXT DEFAULT '',
+               received_at TEXT DEFAULT (datetime('now')),
+               is_stop INTEGER DEFAULT 0,
+               handled INTEGER DEFAULT 0)""")
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_incoming_replies_user "
+        "ON incoming_replies(user_id, received_at DESC)")
     await db.commit()
     cols = await _table_columns(db, "campaigns")
     for col, ddl in (("max_duration_min", "REAL DEFAULT 0"), ("max_messages", "INTEGER DEFAULT 0"),
@@ -1403,6 +1417,108 @@ async def list_blocked(user_id: int) -> list[dict]:
 async def get_blocked_phones(user_id: int) -> set[str]:
     rows = await list_blocked(user_id)
     return {r["phone"] for r in rows}
+
+
+# -- Incoming replies (GoWA webhook) ---------------------------
+
+
+async def get_user_id_by_device(gowa_device_id: str) -> int | None:
+    """Resolve the wasend user_id owning a GoWA device slot. None if unknown."""
+    if not gowa_device_id:
+        return None
+    db = await _connect()
+    try:
+        await _ensure_extra_tables(db)
+        cur = await db.execute(
+            "SELECT user_id FROM user_devices WHERE gowa_device_id = ?",
+            (gowa_device_id,))
+        row = await cur.fetchone()
+        return int(row[0]) if row else None
+    finally:
+        await db.close()
+
+
+async def log_incoming_reply(user_id: int, device_id: str, phone: str,
+                             message_text: str, is_stop: bool = False) -> int:
+    """Store an incoming WhatsApp reply. Returns the new row id."""
+    db = await _connect()
+    try:
+        await _ensure_extra_tables(db)
+        cursor = await db.execute(
+            """INSERT INTO incoming_replies
+               (user_id, device_id, phone, message_text, is_stop)
+               VALUES (?, ?, ?, ?, ?)""",
+            (user_id, device_id or "", phone, message_text or "",
+             1 if is_stop else 0))
+        await db.commit()
+        return cursor.lastrowid or 0
+    finally:
+        await db.close()
+
+
+async def list_incoming_replies(user_id: int | None, only_stop: bool = False,
+                                only_unhandled: bool = False,
+                                limit: int = 200) -> list[dict]:
+    """List incoming replies, newest first. user_id=None lists all (admin)."""
+    db = await _connect()
+    try:
+        await _ensure_extra_tables(db)
+        db.row_factory = aiosqlite.Row
+        query = "SELECT * FROM incoming_replies"
+        params: list = []
+        clauses: list[str] = []
+        if user_id is not None:
+            clauses.append("user_id = ?")
+            params.append(user_id)
+        if only_stop:
+            clauses.append("is_stop = 1")
+        if only_unhandled:
+            clauses.append("handled = 0")
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        query += " ORDER BY received_at DESC LIMIT ?"
+        params.append(limit)
+        cur = await db.execute(query, params)
+        return [dict(r) for r in await cur.fetchall()]
+    finally:
+        await db.close()
+
+
+async def mark_reply_handled(reply_id: int, user_id: int | None) -> bool:
+    """Mark a reply as handled. user_id=None skips the ownership check (admin)."""
+    db = await _connect()
+    try:
+        await _ensure_extra_tables(db)
+        if user_id is None:
+            cur = await db.execute(
+                "UPDATE incoming_replies SET handled = 1 WHERE id = ?",
+                (reply_id,))
+        else:
+            cur = await db.execute(
+                "UPDATE incoming_replies SET handled = 1 WHERE id = ? AND user_id = ?",
+                (reply_id, user_id))
+        await db.commit()
+        return (cur.rowcount or 0) > 0
+    finally:
+        await db.close()
+
+
+async def count_unhandled_replies(user_id: int | None) -> int:
+    """Count replies not yet marked as handled. user_id=None counts all (admin)."""
+    db = await _connect()
+    try:
+        await _ensure_extra_tables(db)
+        if user_id is None:
+            cur = await db.execute(
+                "SELECT COUNT(*) FROM incoming_replies WHERE handled = 0")
+        else:
+            cur = await db.execute(
+                "SELECT COUNT(*) FROM incoming_replies WHERE user_id = ? AND handled = 0",
+                (user_id,))
+        row = await cur.fetchone()
+        return int(row[0]) if row else 0
+    finally:
+        await db.close()
 
 
 # -- Persistent login sessions ---------------------------------

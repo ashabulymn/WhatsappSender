@@ -73,6 +73,11 @@ try:
 except ValueError:
     WEBHOOK_PORT = 8000
 
+# Secret used to verify GoWA incoming-message webhook HMAC signatures
+# (X-Hub-Signature-256). Must match --webhook-secret / WHATSAPP_WEBHOOK_SECRET
+# configured on the GoWA server.
+GOWA_WEBHOOK_SECRET = os.getenv("GOWA_WEBHOOK_SECRET", "")
+
 # -- Database -------------------------------------------------
 DB_PATH = os.getenv("DB_PATH", "whatsapp_sender.db")
 

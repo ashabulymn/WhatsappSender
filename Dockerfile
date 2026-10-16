@@ -16,8 +16,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Source
 COPY . .
 
-# Streamlit dashboard
-EXPOSE 8501
+# Streamlit dashboard + GoWA webhook receiver (Balasan Masuk)
+EXPOSE 8501 8000
 
 # DB SQLite disimpan di volume persisten (/app/data) bila DB_PATH diarahkan ke sana
-CMD ["streamlit", "run", "dashboard.py", "--server.port=8501", "--server.address=0.0.0.0", "--server.headless=true"]
+# start.sh menjalankan: uvicorn webhook:app (WEBHOOK_PORT, default 8000)
+#                      + streamlit dashboard (DASHBOARD_PORT, default 8501)
+CMD ["bash", "start.sh"]

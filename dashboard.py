@@ -543,6 +543,7 @@ with st.sidebar:
         ("schedule", "🗓️ " + t("dash.page_schedule", lang)),
         ("contacts", t("dash.page_contacts", lang)),
         ("templates", t("dash.page_templates", lang)),
+        ("replies", t("dash.page_replies", lang)),
         ("device", "📲 " + t("dash.page_device", lang)),
         ("test", t("dash.page_test", lang)),
         ("config", t("dash.page_config", lang)),
@@ -1257,6 +1258,58 @@ elif page == "templates":
                 run_async(database.delete_template(tpl["name"], user_id=uid))
                 st.success(t("dash.template_deleted", lang).format(name=tpl["name"]))
                 st.rerun()
+
+
+# -- Incoming Replies Page -------------------------------------
+
+elif page == "replies":
+    st.title(t("reply.title", lang))
+    st.caption(t("reply.desc", lang))
+
+    _f_opts = [t("reply.filter_all", lang), t("reply.filter_stop", lang),
+               t("reply.filter_unhandled", lang)]
+    _f = st.selectbox(t("reply.filter", lang), _f_opts, key="reply_filter")
+    _only_stop = _f == t("reply.filter_stop", lang)
+    _only_unhandled = _f == t("reply.filter_unhandled", lang)
+
+    _replies = run_async(database.list_incoming_replies(
+        view_uid, only_stop=_only_stop, only_unhandled=_only_unhandled))
+
+    if _replies:
+        _hdr = st.columns([1.4, 1.2, 4.2, 1.2, 1.2])
+        for _c, _h in zip(_hdr, [t("reply.col_time", lang), t("reply.col_phone", lang),
+                                 t("reply.col_message", lang), t("reply.col_status", lang), ""]):
+            _c.markdown(f"**{_h}**")
+        for _r in _replies:
+            _cols = st.columns([1.4, 1.2, 4.2, 1.2, 1.2])
+            _cols[0].text(str(_r["received_at"])[:16])
+            _cols[1].text(_r["phone"])
+            _cols[2].text((_r["message_text"] or "")[:200])
+            _badge = t("reply.stop_badge", lang) if _r["is_stop"] else ""
+            _stat = t("reply.handled", lang) if _r["handled"] else t("reply.unhandled", lang)
+            _cols[3].text(f"{_badge} {_stat}".strip())
+            if not _r["handled"]:
+                if _cols[4].button(t("reply.mark_handled", lang), key=f"handled_{_r['id']}"):
+                    run_async(database.mark_reply_handled(_r["id"], view_uid))
+                    st.success(t("reply.marked", lang))
+                    st.rerun()
+            st.divider()
+
+        import csv as _csv, io as _io
+        _buf = _io.StringIO()
+        _w = _csv.DictWriter(_buf, fieldnames=["received_at", "device_id", "phone",
+                                              "message_text", "is_stop", "handled"])
+        _w.writeheader()
+        _w.writerows([{k: r.get(k, "") for k in
+                       ["received_at", "device_id", "phone", "message_text",
+                        "is_stop", "handled"]} for r in _replies])
+        st.download_button(
+            f"{t('reply.export_csv', lang)} ({len(_replies)})",
+            data=_buf.getvalue().encode("utf-8"),
+            file_name=f"wasend-replies-{datetime.now().strftime('%Y%m%d-%H%M')}.csv",
+            mime="text/csv")
+    else:
+        st.caption(t("reply.empty", lang))
 
 
 # -- Device Page -----------------------------------------------
